@@ -2385,18 +2385,29 @@ impl CreatorKeysContract {
         admin.require_auth();
         validate_non_zero_address(&env, &recipient)?;
 
-        if env
+        let old_recipient: Option<Address> = env
             .storage()
             .persistent()
-            .get::<DataKey, Address>(&constants::storage::PROTOCOL_FEE_RECIPIENT)
-            .as_ref()
-            == Some(&recipient)
-        {
+            .get(&constants::storage::PROTOCOL_FEE_RECIPIENT);
+
+        if old_recipient.as_ref() == Some(&recipient) {
             return Ok(());
         }
+
         env.storage()
             .persistent()
             .set(&constants::storage::PROTOCOL_FEE_RECIPIENT, &recipient);
+
+        if let Some(old) = old_recipient {
+            env.events().publish(
+                (events::PROTOCOL_FEE_RECIPIENT_UPDATED_EVENT_NAME, admin),
+                events::ProtocolFeeRecipientUpdatedEvent {
+                    old_recipient: old,
+                    new_recipient: recipient,
+                },
+            );
+        }
+
         Ok(())
     }
 
