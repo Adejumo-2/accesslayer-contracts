@@ -546,7 +546,7 @@ impl CreatorKeysContract {
             return Err(PollError::InvalidOption);
         }
 
-        let balance_key = constants::storage::key_balance(&creator_id, &voter);
+        let balance_key = constants::storage::holder_balance_key(&creator_id, &voter);
         let weight: u32 = env.storage().persistent().get(&balance_key).unwrap_or(0);
         if weight == 0 {
             return Err(PollError::NotAHolder);

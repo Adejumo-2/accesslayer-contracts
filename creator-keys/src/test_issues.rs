@@ -6,7 +6,10 @@
 mod issue_tests {
     use soroban_sdk::{testutils::Address as _, Address, Env, String, Vec};
 
-    use crate::{ContractError, CreatorKeysContract, CreatorKeysContractClient};
+    use crate::{
+        compute_bonding_curve_price, constants, ContractError, CreatorKeysContract,
+        CreatorKeysContractClient, CurvePreset,
+    };
 
     const KEY_PRICE: i128 = 100;
 
@@ -373,11 +376,11 @@ mod issue_tests {
         env.as_contract(&contract_id, || {
             // Test Flat curve
             env.storage().persistent().set(
-                &super::constants::storage::curve_preset(&creator),
-                &super::CurvePreset::Flat,
+                &constants::storage::curve_preset(&creator),
+                &CurvePreset::Flat,
             );
             let price_flat =
-                super::compute_bonding_curve_price(&env, &creator, base_price, supply).unwrap();
+                compute_bonding_curve_price(&env, &creator, base_price, supply).unwrap();
             assert_eq!(
                 price_flat, expected_flat,
                 "Flat price mismatch at supply {}",
@@ -386,14 +389,14 @@ mod issue_tests {
 
             // Test Linear curve
             env.storage().persistent().set(
-                &super::constants::storage::curve_preset(&creator),
-                &super::CurvePreset::Linear,
+                &constants::storage::curve_preset(&creator),
+                &CurvePreset::Linear,
             );
             env.storage()
                 .persistent()
-                .set(&super::constants::storage::CURVE_SLOPE, &slope);
+                .set(&constants::storage::CURVE_SLOPE, &slope);
             let price_linear =
-                super::compute_bonding_curve_price(&env, &creator, base_price, supply).unwrap();
+                compute_bonding_curve_price(&env, &creator, base_price, supply).unwrap();
             assert_eq!(
                 price_linear, expected_linear,
                 "Linear price mismatch at supply {}",
@@ -402,14 +405,14 @@ mod issue_tests {
 
             // Test Quadratic curve
             env.storage().persistent().set(
-                &super::constants::storage::curve_preset(&creator),
-                &super::CurvePreset::Quadratic,
+                &constants::storage::curve_preset(&creator),
+                &CurvePreset::Quadratic,
             );
             env.storage()
                 .persistent()
-                .set(&super::constants::storage::CURVE_SLOPE, &slope);
+                .set(&constants::storage::CURVE_SLOPE, &slope);
             let price_quadratic =
-                super::compute_bonding_curve_price(&env, &creator, base_price, supply).unwrap();
+                compute_bonding_curve_price(&env, &creator, base_price, supply).unwrap();
             assert_eq!(
                 price_quadratic, expected_quadratic,
                 "Quadratic price mismatch at supply {}",

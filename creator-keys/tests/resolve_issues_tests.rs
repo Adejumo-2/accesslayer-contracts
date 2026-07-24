@@ -1,5 +1,5 @@
-use creator_keys::{events, ContractError, CreatorKeysContract, CreatorKeysContractClient};
-use soroban_sdk::{testutils::Address as _, testutils::Events, Address, Env, IntoVal, String};
+use creator_keys::{events, CreatorKeysContract, CreatorKeysContractClient};
+use soroban_sdk::{testutils::Address as _, testutils::Events, testutils::Ledger, Address, Env, IntoVal, String};
 
 fn setup(env: &Env) -> (CreatorKeysContractClient<'_>, Address, Address) {
     let contract_id = env.register(CreatorKeysContract, ());
@@ -35,24 +35,24 @@ fn test_creator_supply_increments_sequential_and_fails() {
 
     // Start from a creator with supply 0.
     // Assert supply is 0 before any buy.
-    assert_eq!(client.query_supply(&creator).unwrap(), 0);
+    assert_eq!(client.query_supply(&creator), 0);
 
     // Perform three sequential buy transactions, each for 1 key.
     // Assert supply is 1, 2, and 3 after each respective buy.
     client.buy_key(&creator, &buyer, &100_i128, &None);
-    assert_eq!(client.query_supply(&creator).unwrap(), 1);
+    assert_eq!(client.query_supply(&creator), 1);
 
     client.buy_key(&creator, &buyer, &100_i128, &None);
-    assert_eq!(client.query_supply(&creator).unwrap(), 2);
+    assert_eq!(client.query_supply(&creator), 2);
 
     client.buy_key(&creator, &buyer, &100_i128, &None);
-    assert_eq!(client.query_supply(&creator).unwrap(), 3);
+    assert_eq!(client.query_supply(&creator), 3);
 
     // Assert a failed buy (insufficient funds / payment less than price) does not increment the supply.
     // Here, key price is 100, we try to pay 50.
     let result = client.try_buy_key(&creator, &buyer, &50_i128, &None);
     assert!(result.is_err());
-    assert_eq!(client.query_supply(&creator).unwrap(), 3);
+    assert_eq!(client.query_supply(&creator), 3);
 }
 
 #[test]

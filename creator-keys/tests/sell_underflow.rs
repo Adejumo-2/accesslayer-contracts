@@ -80,7 +80,7 @@ fn test_sell_registered_zero_supply_creator_returns_sell_underflow_without_state
     let seller = Address::generate(&env);
 
     env.as_contract(&contract_id, || {
-        let balance_key = constants::storage::key_balance(&creator, &seller);
+        let balance_key = constants::storage::holder_balance_key(&creator, &seller);
         env.storage().persistent().set(&balance_key, &1_u32);
     });
 

@@ -513,7 +513,7 @@ pub enum CurvePreset {
 ///
 /// For quote-related key usage and invariants, see
 /// [`docs/quote-storage-keys.md`](../../docs/quote-storage-keys.md).
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 #[contracttype]
 pub enum DataKey {
     Creator(Address),
@@ -3031,10 +3031,6 @@ impl CreatorKeysContract {
 
     pub fn query_supply(env: Env, creator: Address) -> Result<u32, ContractError> {
         Self::get_creator_supply(env, creator)
-    }
-
-    pub fn holder_balance_key(env: Env, creator_id: Address, holder: Address) -> DataKey {
-        constants::storage::holder_balance_key(&creator_id, &holder)
     }
 }
 #[cfg(test)]
