@@ -84,7 +84,7 @@ fn test_buy_event_fields_on_success() {
     );
 
     let buyer = Address::generate(&env);
-    
+
     // Set a specific ledger sequence for testing sequence assertion
     let test_ledger = 456u32;
     let mut ledger_info = env.ledger().get();

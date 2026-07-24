@@ -1550,10 +1550,8 @@ impl CreatorKeysContract {
             ledger: env.ledger().sequence(),
         };
 
-        env.events().publish(
-            events::buy_event_topics(&creator, &buyer),
-            buy_event_data,
-        );
+        env.events()
+            .publish(events::buy_event_topics(&creator, &buyer), buy_event_data);
 
         // Extend TTL for creator storage after successful buy
         extend_creator_ttl(&env, &creator);
