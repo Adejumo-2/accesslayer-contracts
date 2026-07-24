@@ -324,8 +324,8 @@ pub mod constants {
             creator_key(creator)
         }
 
-        pub fn key_balance(creator: &Address, holder: &Address) -> DataKey {
-            key_balance_key(creator, holder)
+        pub fn holder_balance_key(creator_id: &Address, holder: &Address) -> DataKey {
+            key_balance_key(creator_id, holder)
         }
 
         pub fn dividend_accumulator(creator: &Address) -> DataKey {
@@ -513,7 +513,7 @@ pub enum CurvePreset {
 ///
 /// For quote-related key usage and invariants, see
 /// [`docs/quote-storage-keys.md`](../../docs/quote-storage-keys.md).
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 #[contracttype]
 pub enum DataKey {
     Creator(Address),
@@ -1205,7 +1205,7 @@ fn compute_claimable_dividend(env: &Env, creator: &Address, holder: &Address) ->
     let pending_key = constants::storage::holder_dividend_pending(creator, holder);
     let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
 
-    let balance_key = constants::storage::key_balance(creator, holder);
+    let balance_key = constants::storage::holder_balance_key(creator, holder);
     let balance: u32 = env.storage().persistent().get(&balance_key).unwrap_or(0);
 
     let diff = accumulator.saturating_sub(checkpoint);
@@ -1504,7 +1504,7 @@ impl CreatorKeysContract {
             }
         }
 
-        let balance_key = constants::storage::key_balance(&creator, &buyer);
+        let balance_key = constants::storage::holder_balance_key(&creator, &buyer);
         // Missing balance entries are treated as zero to keep storage sparse.
         let current_balance: u32 = env.storage().persistent().get(&balance_key).unwrap_or(0);
 
@@ -1542,10 +1542,16 @@ impl CreatorKeysContract {
             credit_treasury_balance(&env, protocol_fee)?;
         }
 
-        env.events().publish(
-            events::buy_event_topics(&creator, &buyer),
-            (profile.supply, payment),
-        );
+        let buy_event_data = events::KeysBoughtEvent {
+            buyer: buyer.clone(),
+            creator_id: creator.clone(),
+            quantity: 1,
+            price_paid: price,
+            ledger: env.ledger().sequence(),
+        };
+
+        env.events()
+            .publish(events::buy_event_topics(&creator, &buyer), buy_event_data);
 
         // Extend TTL for creator storage after successful buy
         extend_creator_ttl(&env, &creator);
@@ -1564,7 +1570,7 @@ impl CreatorKeysContract {
 
         let mut profile: CreatorProfile = read_registered_creator_profile(&env, &creator)?;
 
-        let balance_key = constants::storage::key_balance(&creator, &seller);
+        let balance_key = constants::storage::holder_balance_key(&creator, &seller);
         // Missing balance entries are interpreted as zero and rejected consistently.
         let current_balance: u32 = env.storage().persistent().get(&balance_key).unwrap_or(0);
         if current_balance == 0 {
@@ -1668,7 +1674,7 @@ impl CreatorKeysContract {
             return Err(ContractError::InsufficientSupply);
         }
 
-        let balance_key = constants::storage::key_balance(&creator, &caller);
+        let balance_key = constants::storage::holder_balance_key(&creator, &caller);
         let current_balance: u32 = env.storage().persistent().get(&balance_key).unwrap_or(0);
         if current_balance < amount {
             return Err(ContractError::InsufficientBalance);
@@ -1778,7 +1784,7 @@ impl CreatorKeysContract {
                 return Err(ContractError::NotPositiveAmount);
             }
             // Check if recipient is already at per-wallet cap
-            let balance_key = constants::storage::key_balance(&creator, &entry.address);
+            let balance_key = constants::storage::holder_balance_key(&creator, &entry.address);
             let current_balance: u32 = env.storage().persistent().get(&balance_key).unwrap_or(0);
             if let Some(cap) = max_keys_per_wallet {
                 if current_balance >= cap {
@@ -1817,7 +1823,7 @@ impl CreatorKeysContract {
         // holder at most once. Skip recipients already at per-wallet cap.
         let mut skipped_count: u32 = 0;
         for entry in recipients.iter() {
-            let balance_key = constants::storage::key_balance(&creator, &entry.address);
+            let balance_key = constants::storage::holder_balance_key(&creator, &entry.address);
             let current_balance: u32 = env.storage().persistent().get(&balance_key).unwrap_or(0);
 
             // Check if recipient is already at per-wallet cap
@@ -1912,7 +1918,7 @@ impl CreatorKeysContract {
     }
 
     pub fn get_key_balance(env: Env, creator: Address, wallet: Address) -> u32 {
-        let key = constants::storage::key_balance(&creator, &wallet);
+        let key = constants::storage::holder_balance_key(&creator, &wallet);
         // Read-only callers get `0` for unseen balances to avoid sparse-map lookups failing.
         env.storage().persistent().get(&key).unwrap_or(0)
     }
@@ -1926,7 +1932,7 @@ impl CreatorKeysContract {
     pub fn get_holder_key_count(env: Env, creator: Address, holder: Address) -> HolderKeyCountView {
         let creator_exists = read_creator_profile(&env, &creator).is_some();
         let key_count = if creator_exists {
-            let key = constants::storage::key_balance(&creator, &holder);
+            let key = constants::storage::holder_balance_key(&creator, &holder);
             env.storage().persistent().get(&key).unwrap_or(0)
         } else {
             0
@@ -2718,7 +2724,7 @@ impl CreatorKeysContract {
         env.storage().persistent().set(&locked_key, &locked);
 
         // Transfer keys to creator's balance
-        let balance_key = constants::storage::key_balance(&creator, &creator);
+        let balance_key = constants::storage::holder_balance_key(&creator, &creator);
         let current_balance: u32 = env.storage().persistent().get(&balance_key).unwrap_or(0);
         let new_balance = current_balance
             .checked_add(locked.amount)
@@ -2893,7 +2899,7 @@ impl CreatorKeysContract {
 
         let mut profile: CreatorProfile = read_registered_creator_profile(&env, &creator)?;
 
-        let from_balance_key = constants::storage::key_balance(&creator, &from);
+        let from_balance_key = constants::storage::holder_balance_key(&creator, &from);
         let from_balance: u32 = env
             .storage()
             .persistent()
@@ -2908,7 +2914,7 @@ impl CreatorKeysContract {
         }
 
         // Settle dividends for recipient before balance changes.
-        let to_balance_key = constants::storage::key_balance(&creator, &to);
+        let to_balance_key = constants::storage::holder_balance_key(&creator, &to);
         let to_balance: u32 = env.storage().persistent().get(&to_balance_key).unwrap_or(0);
         settle_holder_dividends(&env, &creator, &to, to_balance)?;
 
@@ -3021,6 +3027,10 @@ impl CreatorKeysContract {
         );
 
         Ok(remaining)
+    }
+
+    pub fn query_supply(env: Env, creator: Address) -> Result<u32, ContractError> {
+        Self::get_creator_supply(env, creator)
     }
 }
 #[cfg(test)]

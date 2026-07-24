@@ -863,14 +863,48 @@
               }
             ],
             "data": {
-              "vec": [
+              "map": [
                 {
-                  "u32": 1
+                  "key": {
+                    "symbol": "buyer"
+                  },
+                  "val": {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
+                  }
                 },
                 {
-                  "i128": {
-                    "hi": 0,
-                    "lo": 100
+                  "key": {
+                    "symbol": "creator_id"
+                  },
+                  "val": {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "ledger"
+                  },
+                  "val": {
+                    "u32": 0
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "price_paid"
+                  },
+                  "val": {
+                    "i128": {
+                      "hi": 0,
+                      "lo": 100
+                    }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "quantity"
+                  },
+                  "val": {
+                    "u32": 1
                   }
                 }
               ]

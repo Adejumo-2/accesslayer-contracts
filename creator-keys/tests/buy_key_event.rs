@@ -34,10 +34,13 @@ fn test_buy_key_event_includes_payment_amount() {
     let events = env.events().all();
     // Last event is the buy event
     let buy_event = events.last().unwrap();
-    // Data is (supply, payment)
-    let (event_supply, event_payment): (u32, i128) = buy_event.2.into_val(&env);
-    assert_eq!(event_supply, 1u32);
-    assert_eq!(event_payment, 150i128);
+    // Data is KeysBoughtEvent struct
+    let event_data: events::KeysBoughtEvent = buy_event.2.into_val(&env);
+    assert_eq!(event_data.buyer, buyer);
+    assert_eq!(event_data.creator_id, creator);
+    assert_eq!(event_data.quantity, 1u32);
+    assert_eq!(event_data.price_paid, 100i128);
+    assert_eq!(event_data.ledger, env.ledger().sequence());
 }
 
 #[test]

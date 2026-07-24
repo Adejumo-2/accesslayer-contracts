@@ -19,11 +19,6 @@ struct TradeTopics {
     actor: Address,
 }
 
-struct BuyEventPayload {
-    supply: u32,
-    payment: i128,
-}
-
 struct SellEventPayload {
     supply: u32,
 }
@@ -80,12 +75,10 @@ impl<'a> EventFixture<'a> {
         }
     }
 
-    fn last_buy_payload(&self, env: &Env) -> BuyEventPayload {
+    fn last_buy_payload(&self, env: &Env) -> events::KeysBoughtEvent {
         let event_log = env.events().all();
         let (_, _, data) = event_log.last().unwrap();
-        let (supply, payment): (u32, i128) = data.into_val(env);
-
-        BuyEventPayload { supply, payment }
+        data.into_val(env)
     }
 
     fn last_sell_payload(&self, env: &Env) -> SellEventPayload {
@@ -176,35 +169,6 @@ impl CreatorRegisteredEventBuilder {
             creator_bps: self.creator_bps,
             protocol_bps: self.protocol_bps,
         }
-    }
-}
-
-/// Builder for constructing expected buy event payloads in tests.
-struct BuyEventPayloadBuilder {
-    supply: u32,
-    payment: i128,
-}
-
-impl BuyEventPayloadBuilder {
-    fn new() -> Self {
-        Self {
-            supply: 0,
-            payment: 0,
-        }
-    }
-
-    fn supply(mut self, supply: u32) -> Self {
-        self.supply = supply;
-        self
-    }
-
-    fn payment(mut self, payment: i128) -> Self {
-        self.payment = payment;
-        self
-    }
-
-    fn build(self) -> (u32, i128) {
-        (self.supply, self.payment)
     }
 }
 
@@ -326,10 +290,10 @@ fn test_buy_key_event_payload_fields_are_validated_from_fixture() {
     assert_eq!(topics.creator, fixture.creator);
     assert_eq!(topics.actor, buyer);
 
-    let expected = BuyEventPayloadBuilder::new().supply(1).payment(150).build();
-
-    assert_eq!(payload.supply, expected.0);
-    assert_eq!(payload.payment, expected.1);
+    assert_eq!(payload.buyer, buyer);
+    assert_eq!(payload.creator_id, fixture.creator);
+    assert_eq!(payload.quantity, 1);
+    assert_eq!(payload.price_paid, 100); // initial key price for supply 0 is 100
 }
 
 #[test]
@@ -344,18 +308,19 @@ fn test_buy_key_event_payload_tracks_new_supply_across_purchases() {
 
     fixture.buy_key(&buyer1, KEY_PRICE);
     let first_payload = fixture.last_buy_payload(&env);
-    assert_eq!(first_payload.supply, 1);
-    assert_eq!(first_payload.payment, KEY_PRICE);
+    assert_eq!(first_payload.price_paid, KEY_PRICE);
 
     fixture.buy_key(&buyer2, KEY_PRICE);
     let second_payload = fixture.last_buy_payload(&env);
-    assert_eq!(second_payload.supply, 2);
-    assert_eq!(second_payload.payment, KEY_PRICE);
+    assert_eq!(second_payload.price_paid, KEY_PRICE);
 }
 
 #[test]
 fn test_buy_key_event_payload_field_order_is_documented() {
-    assert_eq!(events::BUY_EVENT_DATA_FIELDS, ["supply", "payment"]);
+    assert_eq!(
+        events::BUY_EVENT_DATA_FIELDS,
+        ["buyer", "creator_id", "quantity", "price_paid", "ledger"]
+    );
 }
 
 #[test]

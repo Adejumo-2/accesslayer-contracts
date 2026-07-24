@@ -75,7 +75,8 @@ pub const REGISTER_EVENT_DATA_FIELDS: [&str; 6] = [
 ];
 
 /// Stable field order for buy event payloads.
-pub const BUY_EVENT_DATA_FIELDS: [&str; 2] = ["supply", "payment"];
+pub const BUY_EVENT_DATA_FIELDS: [&str; 5] =
+    ["buyer", "creator_id", "quantity", "price_paid", "ledger"];
 
 /// Stable field order for sell event payloads.
 pub const SELL_EVENT_DATA_FIELDS: [&str; 1] = ["supply"];
@@ -128,6 +129,22 @@ pub fn register_event_topics(creator: &Address) -> (Symbol, Address) {
 /// which is distinct from a regular buy event. Indexers should process this
 /// event separately from `BUY_EVENT_NAME` events to correctly track supply
 /// changes and fee accounting.
+/// Stable buy event payload for downstream indexers.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct KeysBoughtEvent {
+    /// Address of the buyer performing the purchase.
+    pub buyer: Address,
+    /// Address of the creator whose keys are being purchased.
+    pub creator_id: Address,
+    /// Number of keys being bought.
+    pub quantity: u32,
+    /// Price paid for the keys (before fees).
+    pub price_paid: i128,
+    /// Ledger sequence number at the time of the purchase.
+    pub ledger: u32,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
 pub struct KeysBoughtBackEvent {
@@ -529,7 +546,7 @@ impl CreatorKeysContract {
             return Err(PollError::InvalidOption);
         }
 
-        let balance_key = constants::storage::key_balance(&creator_id, &voter);
+        let balance_key = constants::storage::holder_balance_key(&creator_id, &voter);
         let weight: u32 = env.storage().persistent().get(&balance_key).unwrap_or(0);
         if weight == 0 {
             return Err(PollError::NotAHolder);
