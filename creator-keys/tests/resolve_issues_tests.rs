@@ -1,5 +1,7 @@
 use creator_keys::{events, CreatorKeysContract, CreatorKeysContractClient};
-use soroban_sdk::{testutils::Address as _, testutils::Events, testutils::Ledger, Address, Env, IntoVal, String};
+use soroban_sdk::{
+    testutils::Address as _, testutils::Events, testutils::Ledger, Address, Env, IntoVal, String,
+};
 
 fn setup(env: &Env) -> (CreatorKeysContractClient<'_>, Address, Address) {
     let contract_id = env.register(CreatorKeysContract, ());

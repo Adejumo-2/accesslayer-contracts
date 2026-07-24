@@ -19,8 +19,6 @@ struct TradeTopics {
     actor: Address,
 }
 
-
-
 struct SellEventPayload {
     supply: u32,
 }
@@ -173,8 +171,6 @@ impl CreatorRegisteredEventBuilder {
         }
     }
 }
-
-
 
 #[test]
 fn test_register_creator_emits_event() {
