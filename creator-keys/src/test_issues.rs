@@ -467,7 +467,10 @@ mod issue_tests {
         let key_a = constants::storage::holder_balance_key(&creator, &holder_a);
         let key_b = constants::storage::holder_balance_key(&creator, &holder_b);
 
-        assert_ne!(key_a, key_b, "different holders must produce different keys");
+        assert_ne!(
+            key_a, key_b,
+            "different holders must produce different keys"
+        );
     }
 
     #[test]
@@ -479,7 +482,10 @@ mod issue_tests {
         let key_ab = constants::storage::holder_balance_key(&addr_a, &addr_b);
         let key_ba = constants::storage::holder_balance_key(&addr_b, &addr_a);
 
-        assert_ne!(key_ab, key_ba, "swapping creator and holder must produce different keys");
+        assert_ne!(
+            key_ab, key_ba,
+            "swapping creator and holder must produce different keys"
+        );
     }
 
     #[test]
