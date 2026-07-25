@@ -80,6 +80,9 @@ pub enum ContractError {
     WhitelistOnly = 31,
     WhitelistTooLarge = 32,
     AirdropRecipientLimitExceeded = 33,
+    InvalidReferrer = 34,
+    WalletCapExceeded = 35,
+    DiscountTierLimitExceeded = 36,
 }
 
 pub mod fee {
@@ -348,10 +351,22 @@ pub mod constants {
             DataKey::MaxSupply(creator.clone())
         }
 
-        pub fn max_keys_per_wallet(creator: &Address) -> DataKey {
-            DataKey::MaxKeysPerWallet(creator.clone())
-        }
+    pub fn max_keys_per_wallet(creator: &Address) -> DataKey {
+        DataKey::MaxKeysPerWallet(creator.clone())
     }
+
+    pub fn referral_fee_bps() -> DataKey {
+        DataKey::ReferralFeeBps
+    }
+
+    pub fn discount_tiers() -> DataKey {
+        DataKey::DiscountTiers
+    }
+
+    pub fn creator_volume(creator: &Address) -> DataKey {
+        DataKey::CreatorVolume(creator.clone())
+    }
+}
 
     fn creator_key(creator: &Address) -> DataKey {
         DataKey::Creator(creator.clone())
@@ -501,6 +516,12 @@ pub const MAX_WHITELIST_SIZE: u32 = 500;
 /// so a single airdrop cannot grow unbounded in storage writes.
 pub const MAX_AIRDROP_RECIPIENTS: u32 = 50;
 
+/// Default referral fee basis points (20% of protocol fee).
+pub const DEFAULT_REFERRAL_FEE_BPS: u32 = 2000;
+
+/// Maximum number of discount tiers allowed.
+pub const MAX_DISCOUNT_TIERS: u32 = 5;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[contracttype]
 pub enum CurvePreset {
@@ -539,6 +560,9 @@ pub enum DataKey {
     CoCreatorFeeBalance(Address, Address),
     Whitelist(Address),
     MaxKeysPerWallet(Address),
+    ReferralFeeBps,
+    DiscountTiers,
+    CreatorVolume(Address),
 }
 
 /// Time-locked key allocation for creator self-vesting.
@@ -574,6 +598,16 @@ pub struct CoCreatorConfig {
 pub struct RegisterCreatorParams {
     pub creator: Address,
     pub handle: String,
+}
+
+/// Single discount tier definition.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct DiscountTier {
+    /// Volume threshold in stroops; creator must reach or exceed this cumulative volume.
+    pub threshold: i128,
+    /// Protocol fee basis points applied when threshold is met.
+    pub protocol_bps: u32,
 }
 
 /// Optional whitelist window configured at creator registration.
@@ -1470,11 +1504,28 @@ impl CreatorKeysContract {
         payment: i128,
         max_price: Option<i128>,
     ) -> Result<u32, ContractError> {
+        Self::buy_key_with_referrer(env, creator, buyer, payment, max_price, None)
+    }
+
+    pub fn buy_key_with_referrer(
+        env: Env,
+        creator: Address,
+        buyer: Address,
+        payment: i128,
+        max_price: Option<i128>,
+        referrer: Option<Address>,
+    ) -> Result<u32, ContractError> {
         buyer.require_auth();
         assert_not_paused(&env)?;
 
         if payment <= 0 {
             return Err(ContractError::NotPositiveAmount);
+        }
+
+        if let Some(referrer_addr) = referrer.as_ref() {
+            if *referrer_addr == buyer {
+                return Err(ContractError::InvalidReferrer);
+            }
         }
 
         let base_price: i128 = env
@@ -1508,6 +1559,20 @@ impl CreatorKeysContract {
         // Missing balance entries are treated as zero to keep storage sparse.
         let current_balance: u32 = env.storage().persistent().get(&balance_key).unwrap_or(0);
 
+        // Check max keys per wallet cap
+        if let Some(cap) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, u32>(&constants::storage::max_keys_per_wallet(&creator))
+        {
+            let post_buy_balance = current_balance
+                .checked_add(1)
+                .ok_or(ContractError::Overflow)?;
+            if post_buy_balance > cap {
+                return Err(ContractError::WalletCapExceeded);
+            }
+        }
+
         // Settle dividends before balance changes so earnings are captured at old balance.
         settle_holder_dividends(&env, &creator, &buyer, current_balance)?;
 
@@ -1537,9 +1602,54 @@ impl CreatorKeysContract {
             let (creator_fee, protocol_fee) =
                 fee::checked_compute_fee_split(price, config.creator_bps, config.protocol_bps)
                     .ok_or(ContractError::Overflow)?;
+
             credit_creator_fee(&env, &creator, creator_fee)?;
-            credit_protocol_fee_recipient_balance(&env, protocol_fee)?;
-            credit_treasury_balance(&env, protocol_fee)?;
+
+            // Split protocol fee between treasury and referrer only when a referrer is provided
+            if let Some(referrer_addr) = referrer {
+                let referral_fee_bps = env
+                    .storage()
+                    .persistent()
+                    .get::<DataKey, u32>(&constants::storage::referral_fee_bps())
+                    .unwrap_or(DEFAULT_REFERRAL_FEE_BPS);
+
+                let (treasury_amount, referral_amount) =
+                    fee::checked_split_bps_amount(protocol_fee, referral_fee_bps)
+                        .ok_or(ContractError::Overflow)?;
+
+                credit_treasury_balance(&env, treasury_amount)?;
+                credit_protocol_fee_recipient_balance(&env, treasury_amount)?;
+
+                if referral_amount > 0 {
+                    // Store referral fee as pending balance for referrer
+                    let referrer_balance_key =
+                        constants::storage::holder_balance_key(&creator, &referrer_addr);
+                    let referrer_current: u32 = env
+                        .storage()
+                        .persistent()
+                        .get(&referrer_balance_key)
+                        .unwrap_or(0);
+                    let referrer_new = referrer_current
+                        .checked_add(referral_amount as u32)
+                        .ok_or(ContractError::Overflow)?;
+                    env.storage().persistent().set(&referrer_balance_key, &referrer_new);
+
+                    env.events().publish(
+                        events::referral_fee_earned_topics(&creator, &referrer_addr),
+                        events::ReferralFeeEarnedEvent {
+                            creator_id: creator.clone(),
+                            buyer: buyer.clone(),
+                            referrer: referrer_addr,
+                            amount: referral_amount,
+                            ledger: env.ledger().sequence(),
+                        },
+                    );
+                }
+            } else {
+                // No referrer: full protocol fee goes to treasury and recipient
+                credit_treasury_balance(&env, protocol_fee)?;
+                credit_protocol_fee_recipient_balance(&env, protocol_fee)?;
+            }
         }
 
         let buy_event_data = events::KeysBoughtEvent {
@@ -3031,6 +3141,81 @@ impl CreatorKeysContract {
 
     pub fn query_supply(env: Env, creator: Address) -> Result<u32, ContractError> {
         Self::get_creator_supply(env, creator)
+    }
+
+    /// Read-only view: returns the configured referral fee basis points.
+    ///
+    /// Returns the default value when no custom value has been set.
+    pub fn get_referral_fee_bps(env: Env) -> u32 {
+        env.storage()
+            .persistent()
+            .get::<DataKey, u32>(&constants::storage::referral_fee_bps())
+            .unwrap_or(DEFAULT_REFERRAL_FEE_BPS)
+    }
+
+    /// Updates the referral fee basis points.
+    ///
+    /// Only callable by the protocol admin.
+    pub fn set_referral_fee_bps(
+        env: Env,
+        admin: Address,
+        bps: u32,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        assert_is_admin(&env, &admin)?;
+        if bps > fee::BPS_MAX {
+            return Err(ContractError::InvalidFeeConfig);
+        }
+        env.storage()
+            .persistent()
+            .set(&constants::storage::referral_fee_bps(), &bps);
+        Ok(())
+    }
+
+    /// Read-only view: returns the per-wallet cap for a creator.
+    ///
+    /// Returns `None` if no cap is set.
+    pub fn get_wallet_cap(env: Env, creator: Address) -> Option<u32> {
+        env.storage()
+            .persistent()
+            .get::<DataKey, u32>(&constants::storage::max_keys_per_wallet(&creator))
+    }
+
+    /// Read-only view: returns cumulative creator volume.
+    ///
+    /// Returns `0` when no volume has been recorded.
+    pub fn get_creator_volume(env: Env, creator: Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get::<DataKey, i128>(&constants::storage::creator_volume(&creator))
+            .unwrap_or(0)
+    }
+
+    /// Updates discount tiers (admin-only).
+    ///
+    /// Replaces the full tier list. Maximum 5 tiers allowed.
+    pub fn update_discount_tiers(
+        env: Env,
+        admin: Address,
+        tiers: Vec<DiscountTier>,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        assert_is_admin(&env, &admin)?;
+        if tiers.len() > MAX_DISCOUNT_TIERS {
+            return Err(ContractError::DiscountTierLimitExceeded);
+        }
+        env.storage()
+            .persistent()
+            .set(&constants::storage::discount_tiers(), &tiers);
+        Ok(())
+    }
+
+    /// Read-only view: returns the current discount tiers.
+    pub fn get_discount_tiers(env: Env) -> Vec<DiscountTier> {
+        env.storage()
+            .persistent()
+            .get::<DataKey, Vec<DiscountTier>>(&constants::storage::discount_tiers())
+            .unwrap_or(Vec::new(&env))
     }
 }
 #[cfg(test)]
