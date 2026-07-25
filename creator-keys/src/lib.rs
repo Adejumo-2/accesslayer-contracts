@@ -751,7 +751,15 @@ pub fn read_registered_creator_profile(
 /// Use this helper wherever repeated key balance read logic is needed to keep
 /// missing-balance behavior consistent across the contract.
 pub fn read_key_balance(env: &Env, creator: &Address) -> u32 {
-    read_creator_profile(env, creator)
+    read_creator_supply(env, creator)
+}
+
+/// Reads a creator's current key supply from persistent storage.
+///
+/// Returns `0` if the creator has not been registered (no supply record exists).
+/// Centralises the supply read so the storage key format is defined once.
+pub fn read_creator_supply(env: &Env, creator_id: &Address) -> u32 {
+    read_creator_profile(env, creator_id)
         .map(|p| p.supply)
         .unwrap_or(0)
 }
@@ -2181,9 +2189,9 @@ impl CreatorKeysContract {
     /// Read-only view: returns the total key supply for a creator.
     ///
     /// Returns `0` if the creator is not registered, avoiding panics for
-    /// invalid lookups. Delegates to the shared [`read_key_balance`] helper.
+    /// invalid lookups. Delegates to the shared [`read_creator_supply`] helper.
     pub fn get_total_key_supply(env: Env, creator: Address) -> u32 {
-        read_key_balance(&env, &creator)
+        read_creator_supply(&env, &creator)
     }
 
     /// Read-only view: returns the current supply for a registered creator.
@@ -3626,6 +3634,78 @@ mod tests {
         let valid = Address::generate(&env);
         let result = super::validate_non_zero_address(&env, &valid);
         assert_eq!(result, Ok(()));
+    }
+
+    // --- read_creator_supply helper tests (#587) ---
+
+    #[test]
+    fn test_read_creator_supply_returns_correct_supply_for_initialized_creator() {
+        use soroban_sdk::{testutils::Address as _, Address, Env};
+
+        let env = Env::default();
+        let creator = Address::generate(&env);
+        let contract_id = env.register(super::CreatorKeysContract, ());
+
+        let profile = super::CreatorProfile {
+            creator: creator.clone(),
+            handle: soroban_sdk::String::from_str(&env, "alice"),
+            supply: 42,
+            holder_count: 5,
+            fee_recipient: creator.clone(),
+            registered_at: 0,
+        };
+
+        let supply = env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .set(&super::constants::storage::creator(&creator), &profile);
+
+            super::read_creator_supply(&env, &creator)
+        });
+        assert_eq!(supply, 42);
+    }
+
+    #[test]
+    fn test_read_creator_supply_returns_zero_for_uninitialized_creator() {
+        use soroban_sdk::{testutils::Address as _, Address, Env};
+
+        let env = Env::default();
+        let missing_creator = Address::generate(&env);
+        let contract_id = env.register(super::CreatorKeysContract, ());
+
+        let supply = env.as_contract(&contract_id, || {
+            super::read_creator_supply(&env, &missing_creator)
+        });
+        assert_eq!(supply, 0);
+    }
+
+    #[test]
+    fn test_read_creator_supply_matches_read_key_balance() {
+        use soroban_sdk::{testutils::Address as _, Address, Env};
+
+        let env = Env::default();
+        let creator = Address::generate(&env);
+        let contract_id = env.register(super::CreatorKeysContract, ());
+
+        let profile = super::CreatorProfile {
+            creator: creator.clone(),
+            handle: soroban_sdk::String::from_str(&env, "alice"),
+            supply: 15,
+            holder_count: 3,
+            fee_recipient: creator.clone(),
+            registered_at: 0,
+        };
+
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .set(&super::constants::storage::creator(&creator), &profile);
+
+            let supply_from_new = super::read_creator_supply(&env, &creator);
+            let supply_from_old = super::read_key_balance(&env, &creator);
+            assert_eq!(supply_from_new, supply_from_old);
+            assert_eq!(supply_from_new, 15);
+        });
     }
 }
 
