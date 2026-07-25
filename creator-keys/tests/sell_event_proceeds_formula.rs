@@ -5,7 +5,10 @@ mod contract_test_env;
 use contract_test_env::{
     register_creator_keys, register_test_creator, set_pricing_and_fees, test_env_with_auths,
 };
-use soroban_sdk::{testutils::Address as _, Address};
+use soroban_sdk::{
+    testutils::{Address as _, Events},
+    Address,
+};
 
 const KEY_PRICE: i128 = 1000;
 const CREATOR_BPS: u32 = 9000;
