@@ -505,6 +505,23 @@ pub const KEY_DECIMALS: u32 = 7;
 /// (creator config, supply, holder map, fee config) after every successful
 /// buy or sell operation to prevent active creator state from expiring.
 pub const CREATOR_TTL_LEDGERS: u32 = 6311520; // ~2 years at 5s per ledger
+
+/// TTL (time-to-live) extension decision logic.
+///
+/// Storage TTL extension should only fire when the remaining TTL drops below
+/// a configured minimum threshold. This pure helper isolates that decision so
+/// it can be unit tested independently of Soroban's storage TTL model.
+pub mod ttl {
+    /// Returns `true` when `current_ttl` (ledgers remaining) is strictly below
+    /// `threshold`, meaning a TTL extension should be triggered.
+    ///
+    /// The check is exclusive at the boundary: a TTL exactly at `threshold`
+    /// does not trigger an extension.
+    pub fn should_extend(current_ttl: u32, threshold: u32) -> bool {
+        current_ttl < threshold
+    }
+}
+
 pub const HANDLE_LEN_MIN: u32 = 3;
 pub const HANDLE_LEN_MAX: u32 = 32;
 pub const MAX_WHITELIST_SIZE: u32 = 500;
@@ -3719,6 +3736,40 @@ mod tests {
             assert_eq!(supply_from_new, supply_from_old);
             assert_eq!(supply_from_new, 15);
         });
+    }
+
+    // --- TTL extension threshold unit tests (#605) ---
+
+    #[test]
+    fn test_ttl_extension_triggers_below_threshold() {
+        // TTL at threshold minus 1 ledger: extension should be triggered.
+        assert!(super::ttl::should_extend(99, 100));
+    }
+
+    #[test]
+    fn test_ttl_extension_not_triggered_at_threshold_boundary() {
+        // TTL exactly at threshold: extension should not be triggered (boundary is exclusive).
+        assert!(!super::ttl::should_extend(100, 100));
+    }
+
+    #[test]
+    fn test_ttl_extension_not_triggered_above_threshold() {
+        // TTL at threshold plus 100 ledgers: extension should not be triggered.
+        assert!(!super::ttl::should_extend(200, 100));
+    }
+
+    #[test]
+    fn test_extended_ttl_equals_configured_extension_amount() {
+        const THRESHOLD: u32 = 100;
+        let current_ttl = THRESHOLD - 1;
+
+        let new_ttl = if super::ttl::should_extend(current_ttl, THRESHOLD) {
+            super::CREATOR_TTL_LEDGERS
+        } else {
+            current_ttl
+        };
+
+        assert_eq!(new_ttl, super::CREATOR_TTL_LEDGERS);
     }
 }
 
