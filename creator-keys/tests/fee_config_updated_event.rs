@@ -3,11 +3,11 @@
 mod contract_test_env;
 
 use contract_test_env::{register_creator_keys, test_env_with_auths};
+use creator_keys::events;
 use soroban_sdk::{
     testutils::{Address as _, Events},
     Address, IntoVal,
 };
-use creator_keys::events;
 
 #[test]
 fn test_fee_config_updated_event_emitted() {
@@ -20,7 +20,7 @@ fn test_fee_config_updated_event_emitted() {
 
     let event_log = env.events().all();
     assert!(!event_log.is_empty());
-    
+
     let (_, topics, data) = event_log.last().unwrap();
     let event_name: soroban_sdk::Symbol = topics.get(0).unwrap().into_val(&env);
     assert_eq!(event_name, events::FEE_CONFIG_UPDATED_EVENT_NAME);

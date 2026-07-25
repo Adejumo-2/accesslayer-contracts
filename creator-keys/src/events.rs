@@ -281,7 +281,6 @@ pub struct FeeConfigUpdatedEvent {
     pub updated_at_ledger: u32,
 }
 
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
 pub struct CoCreatorFeeEarned {

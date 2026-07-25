@@ -5,10 +5,7 @@ mod contract_test_env;
 use contract_test_env::{
     register_creator_keys, register_test_creator, set_pricing_and_fees, test_env_with_auths,
 };
-use soroban_sdk::{
-    testutils::Address as _,
-    Address,
-};
+use soroban_sdk::{testutils::Address as _, Address};
 
 const KEY_PRICE: i128 = 1000;
 const CREATOR_BPS: u32 = 9000;
@@ -28,7 +25,11 @@ fn advance_supply_to(
 }
 
 // Formula: price = base_price. (For this preset / setup)
-fn compute_independent_expected_proceeds(price: i128, _creator_bps: u32, protocol_bps: u32) -> i128 {
+fn compute_independent_expected_proceeds(
+    price: i128,
+    _creator_bps: u32,
+    protocol_bps: u32,
+) -> i128 {
     // Rounding matches checked_compute_fee_split
     let protocol_fee = (price * protocol_bps as i128) / 10_000;
     let creator_fee = price - protocol_fee;
@@ -60,14 +61,21 @@ fn test_sell_event_proceeds_at_supply_5() {
     // Verify the sell event is present and matches the independently computed proceeds
     let event_log = env.events().all();
     assert!(!event_log.is_empty(), "Events should be emitted");
-    
+
     // Check sell event
     let sell_quote = client.get_sell_quote(&creator, &trader);
     let raw_sell_price = KEY_PRICE;
-    let expected_proceeds = compute_independent_expected_proceeds(raw_sell_price, CREATOR_BPS, PROTOCOL_BPS);
+    let expected_proceeds =
+        compute_independent_expected_proceeds(raw_sell_price, CREATOR_BPS, PROTOCOL_BPS);
 
-    assert_eq!(sell_quote.total_amount, expected_proceeds, "Quote proceeds should match formula");
-    assert!(sell_quote.total_amount < raw_sell_price, "Proceeds should be less than raw sell price");
+    assert_eq!(
+        sell_quote.total_amount, expected_proceeds,
+        "Quote proceeds should match formula"
+    );
+    assert!(
+        sell_quote.total_amount < raw_sell_price,
+        "Proceeds should be less than raw sell price"
+    );
 }
 
 #[test]
@@ -93,9 +101,16 @@ fn test_sell_event_proceeds_at_supply_10() {
     client.sell_key(&creator, &trader, &None);
 
     let raw_sell_price = KEY_PRICE;
-    let expected_proceeds = compute_independent_expected_proceeds(raw_sell_price, CREATOR_BPS, PROTOCOL_BPS);
+    let expected_proceeds =
+        compute_independent_expected_proceeds(raw_sell_price, CREATOR_BPS, PROTOCOL_BPS);
     let sell_quote = client.get_sell_quote(&creator, &trader);
 
-    assert_eq!(sell_quote.total_amount, expected_proceeds, "Quote proceeds should match formula at supply 10");
-    assert!(sell_quote.total_amount < raw_sell_price, "Proceeds should be less than raw sell price at supply 10");
+    assert_eq!(
+        sell_quote.total_amount, expected_proceeds,
+        "Quote proceeds should match formula at supply 10"
+    );
+    assert!(
+        sell_quote.total_amount < raw_sell_price,
+        "Proceeds should be less than raw sell price at supply 10"
+    );
 }
