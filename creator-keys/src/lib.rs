@@ -764,6 +764,29 @@ pub fn read_creator_supply(env: &Env, creator_id: &Address) -> u32 {
         .unwrap_or(0)
 }
 
+/// Writes an updated key supply back to persistent storage for a creator.
+///
+/// Reads the existing creator profile from storage, updates the `supply` field,
+/// and persists the result under the standard creator storage key. This
+/// centralises the write path so that buy, sell, and buyback all share the
+/// same key-construction logic instead of building it inline.
+///
+/// # Panics
+///
+/// Panics if the creator profile does not exist in storage. Callers must
+/// verify creator registration (e.g. via [`read_registered_creator_profile`])
+/// before invoking this helper.
+pub fn write_creator_supply(env: &Env, creator_id: &Address, supply: u32) {
+    let key = constants::storage::creator(creator_id);
+    let mut profile: CreatorProfile = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .expect("write_creator_supply: creator profile not found");
+    profile.supply = supply;
+    env.storage().persistent().set(&key, &profile);
+}
+
 /// Reads an empty string for use as a default in read-only view methods.
 ///
 /// Use this helper wherever an empty string is needed to maintain consistency
@@ -1591,14 +1614,17 @@ impl CreatorKeysContract {
                 .ok_or(ContractError::Overflow)?;
         }
 
+        // Persist holder_count before write_creator_supply reads the profile.
+        let key = constants::storage::creator(&creator);
+        env.storage().persistent().set(&key, &profile);
+
         profile.supply = profile
             .supply
             .checked_add(1)
             .ok_or(ContractError::Overflow)?;
 
-        let key = constants::storage::creator(&creator);
         // Supply and holder_count must always move together with buyer balance writes.
-        env.storage().persistent().set(&key, &profile);
+        write_creator_supply(&env, &creator, profile.supply);
 
         let new_balance = current_balance
             .checked_add(1)
@@ -1728,10 +1754,13 @@ impl CreatorKeysContract {
                 .ok_or(ContractError::SellUnderflow)?;
         }
 
+        // Persist holder_count before write_creator_supply reads the profile.
         let key = constants::storage::creator(&creator);
-        // Profile and holder balance are updated in the same call to preserve
-        // supply/holder_count invariants for subsequent reads.
         env.storage().persistent().set(&key, &profile);
+
+        // Supply and holder balance are updated together to preserve
+        // supply/holder_count invariants for subsequent reads.
+        write_creator_supply(&env, &creator, profile.supply);
         env.storage().persistent().set(&balance_key, &new_balance);
         accrue_sell_trade_fees(&env, &creator, price)?;
 
@@ -3718,6 +3747,110 @@ mod tests {
             let supply_from_old = super::read_key_balance(&env, &creator);
             assert_eq!(supply_from_new, supply_from_old);
             assert_eq!(supply_from_new, 15);
+        });
+    }
+
+    // --- write_creator_supply helper tests (#596) ---
+
+    #[test]
+    fn test_write_creator_supply_read_after_write_returns_written_value() {
+        use soroban_sdk::{testutils::Address as _, Address, Env};
+
+        let env = Env::default();
+        let creator = Address::generate(&env);
+        let contract_id = env.register(super::CreatorKeysContract, ());
+
+        let profile = super::CreatorProfile {
+            creator: creator.clone(),
+            handle: soroban_sdk::String::from_str(&env, "alice"),
+            supply: 0,
+            holder_count: 0,
+            fee_recipient: creator.clone(),
+            registered_at: 0,
+        };
+
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .set(&super::constants::storage::creator(&creator), &profile);
+
+            super::write_creator_supply(&env, &creator, 42);
+            let result = super::read_creator_supply(&env, &creator);
+            assert_eq!(result, 42);
+        });
+    }
+
+    #[test]
+    fn test_write_creator_supply_overwrite_replaces_previous_value() {
+        use soroban_sdk::{testutils::Address as _, Address, Env};
+
+        let env = Env::default();
+        let creator = Address::generate(&env);
+        let contract_id = env.register(super::CreatorKeysContract, ());
+
+        let profile = super::CreatorProfile {
+            creator: creator.clone(),
+            handle: soroban_sdk::String::from_str(&env, "alice"),
+            supply: 10,
+            holder_count: 0,
+            fee_recipient: creator.clone(),
+            registered_at: 0,
+        };
+
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .set(&super::constants::storage::creator(&creator), &profile);
+
+            super::write_creator_supply(&env, &creator, 25);
+            assert_eq!(super::read_creator_supply(&env, &creator), 25);
+
+            super::write_creator_supply(&env, &creator, 50);
+            assert_eq!(super::read_creator_supply(&env, &creator), 50);
+        });
+    }
+
+    #[test]
+    fn test_write_creator_supply_preserves_other_profile_fields() {
+        use soroban_sdk::{testutils::Address as _, Address, Env};
+
+        let env = Env::default();
+        let creator = Address::generate(&env);
+        let contract_id = env.register(super::CreatorKeysContract, ());
+
+        let profile = super::CreatorProfile {
+            creator: creator.clone(),
+            handle: soroban_sdk::String::from_str(&env, "alice"),
+            supply: 10,
+            holder_count: 5,
+            fee_recipient: creator.clone(),
+            registered_at: 42,
+        };
+
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .set(&super::constants::storage::creator(&creator), &profile);
+
+            super::write_creator_supply(&env, &creator, 20);
+
+            let updated: super::CreatorProfile = env
+                .storage()
+                .persistent()
+                .get(&super::constants::storage::creator(&creator))
+                .unwrap();
+
+            assert_eq!(updated.supply, 20, "supply should be updated");
+            assert_eq!(updated.holder_count, 5, "holder_count should be preserved");
+            assert_eq!(
+                updated.handle,
+                soroban_sdk::String::from_str(&env, "alice"),
+                "handle should be preserved"
+            );
+            assert_eq!(
+                updated.registered_at, 42,
+                "registered_at should be preserved"
+            );
         });
     }
 }
