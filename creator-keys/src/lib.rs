@@ -351,22 +351,22 @@ pub mod constants {
             DataKey::MaxSupply(creator.clone())
         }
 
-    pub fn max_keys_per_wallet(creator: &Address) -> DataKey {
-        DataKey::MaxKeysPerWallet(creator.clone())
-    }
+        pub fn max_keys_per_wallet(creator: &Address) -> DataKey {
+            DataKey::MaxKeysPerWallet(creator.clone())
+        }
 
-    pub fn referral_fee_bps() -> DataKey {
-        DataKey::ReferralFeeBps
-    }
+        pub fn referral_fee_bps() -> DataKey {
+            DataKey::ReferralFeeBps
+        }
 
-    pub fn discount_tiers() -> DataKey {
-        DataKey::DiscountTiers
-    }
+        pub fn discount_tiers() -> DataKey {
+            DataKey::DiscountTiers
+        }
 
-    pub fn creator_volume(creator: &Address) -> DataKey {
-        DataKey::CreatorVolume(creator.clone())
+        pub fn creator_volume(creator: &Address) -> DataKey {
+            DataKey::CreatorVolume(creator.clone())
+        }
     }
-}
 
     fn creator_key(creator: &Address) -> DataKey {
         DataKey::Creator(creator.clone())
@@ -1632,7 +1632,9 @@ impl CreatorKeysContract {
                     let referrer_new = referrer_current
                         .checked_add(referral_amount as u32)
                         .ok_or(ContractError::Overflow)?;
-                    env.storage().persistent().set(&referrer_balance_key, &referrer_new);
+                    env.storage()
+                        .persistent()
+                        .set(&referrer_balance_key, &referrer_new);
 
                     env.events().publish(
                         events::referral_fee_earned_topics(&creator, &referrer_addr),
@@ -3156,11 +3158,7 @@ impl CreatorKeysContract {
     /// Updates the referral fee basis points.
     ///
     /// Only callable by the protocol admin.
-    pub fn set_referral_fee_bps(
-        env: Env,
-        admin: Address,
-        bps: u32,
-    ) -> Result<(), ContractError> {
+    pub fn set_referral_fee_bps(env: Env, admin: Address, bps: u32) -> Result<(), ContractError> {
         admin.require_auth();
         assert_is_admin(&env, &admin)?;
         if bps > fee::BPS_MAX {
