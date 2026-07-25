@@ -31,14 +31,19 @@ fn test_buy_fee_accumulation_matches_independent_sum() {
 
     // Compute expected fees independently (not from contract reads).
     let expected_protocol_fee = compute_expected_protocol_fee(KEY_PRICE, PROTOCOL_BPS);
-    let expected_creator_fee =
-        compute_expected_creator_fee(KEY_PRICE, CREATOR_BPS, PROTOCOL_BPS);
+    let expected_creator_fee = compute_expected_creator_fee(KEY_PRICE, CREATOR_BPS, PROTOCOL_BPS);
 
     // Record pre-buy balances.
     let protocol_balance_before = client.get_protocol_recipient_balance();
     let creator_balance_before = client.get_creator_fee_balance(&creator);
-    assert_eq!(protocol_balance_before, 0, "protocol balance should start at 0");
-    assert_eq!(creator_balance_before, 0, "creator balance should start at 0");
+    assert_eq!(
+        protocol_balance_before, 0,
+        "protocol balance should start at 0"
+    );
+    assert_eq!(
+        creator_balance_before, 0,
+        "creator balance should start at 0"
+    );
 
     // Wallet A buys 3 keys.
     for _ in 0..3 {
@@ -71,8 +76,14 @@ fn test_buy_fee_accumulation_matches_independent_sum() {
     );
 
     // Sanity check: the two balances are different (non-zero, distinct).
-    assert!(protocol_balance_after > 0, "protocol balance must be positive");
-    assert!(creator_balance_after > 0, "creator balance must be positive");
+    assert!(
+        protocol_balance_after > 0,
+        "protocol balance must be positive"
+    );
+    assert!(
+        creator_balance_after > 0,
+        "creator balance must be positive"
+    );
     assert_ne!(
         protocol_balance_after, creator_balance_after,
         "protocol and creator balances should differ given 90/10 split"
