@@ -6,7 +6,10 @@
 
 mod contract_test_env;
 
-use contract_test_env::{register_creator_keys, register_test_creator, set_key_price_for_tests};
+use contract_test_env::{
+    assert_storage_absent, register_creator_keys, register_test_creator, set_key_price_for_tests,
+};
+use creator_keys::constants;
 use soroban_sdk::{testutils::Address as _, Address};
 
 const KEY_PRICE: i128 = 100;
@@ -150,7 +153,9 @@ fn test_holder_entry_not_removed_after_partial_sell() {
 fn test_full_sell_removes_holder_entry() {
     let env = soroban_sdk::Env::default();
     env.mock_all_auths();
-    let (client, creator) = setup(&env);
+    let (client, contract_id) = register_creator_keys(&env);
+    set_key_price_for_tests(&env, &client, KEY_PRICE);
+    let creator = register_test_creator(&env, &client, "alice");
     let holder = Address::generate(&env);
 
     // Buy 5 keys
@@ -173,6 +178,14 @@ fn test_full_sell_removes_holder_entry() {
         0,
         "holder count should be 0 after full sell (entry removed)"
     );
+
+    // Verify the underlying storage key has been removed.
+    env.as_contract(&contract_id, || {
+        assert_storage_absent(
+            &env,
+            &constants::storage::holder_balance_key(&creator, &holder),
+        );
+    });
 }
 
 #[test]
