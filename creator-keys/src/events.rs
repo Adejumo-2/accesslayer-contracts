@@ -273,6 +273,17 @@ pub struct CreatorFeeRecipientUpdatedEvent {
     pub new_recipient: Address,
 }
 
+/// Event name for global fee configuration update.
+pub const FEE_CONFIG_UPDATED_EVENT_NAME: Symbol = symbol_short!("fee_upd");
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct FeeConfigUpdatedEvent {
+    pub old_bps: u32,
+    pub new_bps: u32,
+    pub updated_at_ledger: u32,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
 pub struct CoCreatorFeeEarned {
