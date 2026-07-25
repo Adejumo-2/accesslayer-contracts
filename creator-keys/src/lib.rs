@@ -2217,9 +2217,22 @@ impl CreatorKeysContract {
         {
             return Ok(());
         }
+        let old_config = read_protocol_fee_config(&env);
+        let old_bps = old_config.as_ref().map(|c| c.protocol_bps).unwrap_or(0);
+
         env.storage()
             .persistent()
             .set(&constants::storage::FEE_CONFIG, &config);
+
+        // Emit global fee config update event
+        env.events().publish(
+            (events::FEE_CONFIG_UPDATED_EVENT_NAME, admin),
+            events::FeeConfigUpdatedEvent {
+                old_bps,
+                new_bps: protocol_bps,
+                updated_at_ledger: env.ledger().sequence(),
+            },
+        );
 
         // Increment protocol state version on config update
         let current_version = env
