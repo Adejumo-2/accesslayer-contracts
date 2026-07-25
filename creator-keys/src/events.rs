@@ -49,6 +49,9 @@ pub const TRANSFER_EVENT_NAME: Symbol = symbol_short!("transfer");
 /// Event name for creator key buyback.
 pub const BUYBACK_EVENT_NAME: Symbol = symbol_short!("buyback");
 
+/// Event name for referral fee earned.
+pub const REFERRAL_FEE_EARNED_EVENT_NAME: Symbol = symbol_short!("referral");
+
 /// Event name for governance poll creation.
 pub const POLL_CREATED_EVENT_NAME: Symbol = symbol_short!("poll_new");
 
@@ -287,6 +290,35 @@ pub fn co_creator_fee_earned_topics(
         CO_CREATOR_FEE_EARNED_EVENT_NAME,
         creator_id.clone(),
         co_creator.clone(),
+    )
+}
+
+/// Stable referral fee earned event payload for downstream indexers.
+///
+/// Event shape:
+/// - topics: `(REFERRAL_FEE_EARNED_EVENT_NAME, creator_id, referrer)`
+/// - data: `ReferralFeeEarnedEvent`
+///
+/// Emitted when a referrer earns a share of the protocol fee from a buy.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct ReferralFeeEarnedEvent {
+    pub creator_id: Address,
+    pub buyer: Address,
+    pub referrer: Address,
+    pub amount: i128,
+    pub ledger: u32,
+}
+
+/// Shared referral fee earned event topics tuple.
+pub fn referral_fee_earned_topics(
+    creator_id: &Address,
+    referrer: &Address,
+) -> (Symbol, Address, Address) {
+    (
+        REFERRAL_FEE_EARNED_EVENT_NAME,
+        creator_id.clone(),
+        referrer.clone(),
     )
 }
 
