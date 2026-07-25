@@ -781,6 +781,29 @@ pub fn read_creator_supply(env: &Env, creator_id: &Address) -> u32 {
         .unwrap_or(0)
 }
 
+/// Writes an updated key supply back to persistent storage for a creator.
+///
+/// Reads the existing creator profile from storage, updates the `supply` field,
+/// and persists the result under the standard creator storage key. This
+/// centralises the write path so that buy, sell, and buyback all share the
+/// same key-construction logic instead of building it inline.
+///
+/// # Panics
+///
+/// Panics if the creator profile does not exist in storage. Callers must
+/// verify creator registration (e.g. via [`read_registered_creator_profile`])
+/// before invoking this helper.
+pub fn write_creator_supply(env: &Env, creator_id: &Address, supply: u32) {
+    let key = constants::storage::creator(creator_id);
+    let mut profile: CreatorProfile = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .expect("write_creator_supply: creator profile not found");
+    profile.supply = supply;
+    env.storage().persistent().set(&key, &profile);
+}
+
 /// Reads an empty string for use as a default in read-only view methods.
 ///
 /// Use this helper wherever an empty string is needed to maintain consistency
@@ -1608,14 +1631,17 @@ impl CreatorKeysContract {
                 .ok_or(ContractError::Overflow)?;
         }
 
+        // Persist holder_count before write_creator_supply reads the profile.
+        let key = constants::storage::creator(&creator);
+        env.storage().persistent().set(&key, &profile);
+
         profile.supply = profile
             .supply
             .checked_add(1)
             .ok_or(ContractError::Overflow)?;
 
-        let key = constants::storage::creator(&creator);
         // Supply and holder_count must always move together with buyer balance writes.
-        env.storage().persistent().set(&key, &profile);
+        write_creator_supply(&env, &creator, profile.supply);
 
         let new_balance = current_balance
             .checked_add(1)
@@ -1745,10 +1771,13 @@ impl CreatorKeysContract {
                 .ok_or(ContractError::SellUnderflow)?;
         }
 
+        // Persist holder_count before write_creator_supply reads the profile.
         let key = constants::storage::creator(&creator);
-        // Profile and holder balance are updated in the same call to preserve
-        // supply/holder_count invariants for subsequent reads.
         env.storage().persistent().set(&key, &profile);
+
+        // Supply and holder balance are updated together to preserve
+        // supply/holder_count invariants for subsequent reads.
+        write_creator_supply(&env, &creator, profile.supply);
         env.storage().persistent().set(&balance_key, &new_balance);
         accrue_sell_trade_fees(&env, &creator, price)?;
 
