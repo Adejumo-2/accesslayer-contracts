@@ -3316,7 +3316,6 @@ impl CreatorKeysContract {
 #[cfg(test)]
 mod tests {
     use super::fee;
-    use soroban_sdk::{testutils::Address as _, Address, Env};
 
     #[test]
     fn test_fee_split_90_10_1000() {
@@ -3830,6 +3829,150 @@ mod tests {
         };
 
         assert_eq!(new_ttl, super::CREATOR_TTL_LEDGERS);
+    }
+
+    // --- read_creator_fee_recipient / write_creator_fee_recipient helpers (#603) ---
+
+    #[test]
+    fn test_read_creator_fee_recipient_returns_none_for_unset_creator() {
+        use soroban_sdk::{testutils::Address as _, Address, Env};
+
+        let env = Env::default();
+        let contract_id = env.register(super::CreatorKeysContract, ());
+        let creator = Address::generate(&env);
+
+        let recipient = env.as_contract(&contract_id, || {
+            super::read_creator_fee_recipient(&env, &creator)
+        });
+
+        assert_eq!(
+            recipient, None,
+            "unregistered creator should have no fee recipient"
+        );
+    }
+
+    #[test]
+    fn test_read_creator_fee_recipient_returns_address_after_write() {
+        use soroban_sdk::{testutils::Address as _, Address, Env};
+
+        let env = Env::default();
+        let contract_id = env.register(super::CreatorKeysContract, ());
+        let creator = Address::generate(&env);
+        let recipient_a = Address::generate(&env);
+
+        let profile = super::CreatorProfile {
+            creator: creator.clone(),
+            handle: soroban_sdk::String::from_str(&env, "alice"),
+            supply: 0,
+            holder_count: 0,
+            fee_recipient: recipient_a.clone(),
+            registered_at: 0,
+        };
+
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .set(&super::constants::storage::creator(&creator), &profile);
+
+            let read = super::read_creator_fee_recipient(&env, &creator);
+            assert_eq!(
+                read,
+                Some(recipient_a),
+                "should return address A after write"
+            );
+        });
+    }
+
+    #[test]
+    fn test_overwrite_creator_fee_recipient_replaces_old_address() {
+        use soroban_sdk::{testutils::Address as _, Address, Env};
+
+        let env = Env::default();
+        let contract_id = env.register(super::CreatorKeysContract, ());
+        let creator = Address::generate(&env);
+        let recipient_a = Address::generate(&env);
+        let recipient_b = Address::generate(&env);
+
+        let profile = super::CreatorProfile {
+            creator: creator.clone(),
+            handle: soroban_sdk::String::from_str(&env, "alice"),
+            supply: 0,
+            holder_count: 0,
+            fee_recipient: recipient_a.clone(),
+            registered_at: 0,
+        };
+
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .set(&super::constants::storage::creator(&creator), &profile);
+
+            super::write_creator_fee_recipient(&env, &creator, &recipient_b);
+
+            let read = super::read_creator_fee_recipient(&env, &creator);
+            assert_eq!(
+                read,
+                Some(recipient_b),
+                "should return address B after overwrite"
+            );
+            assert_ne!(read, Some(recipient_a), "should no longer return address A");
+        });
+    }
+
+    #[test]
+    fn test_two_creators_store_independent_recipient_addresses() {
+        use soroban_sdk::{testutils::Address as _, Address, Env};
+
+        let env = Env::default();
+        let contract_id = env.register(super::CreatorKeysContract, ());
+        let creator_1 = Address::generate(&env);
+        let creator_2 = Address::generate(&env);
+        let recipient_1 = Address::generate(&env);
+        let recipient_2 = Address::generate(&env);
+
+        let profile_1 = super::CreatorProfile {
+            creator: creator_1.clone(),
+            handle: soroban_sdk::String::from_str(&env, "alice"),
+            supply: 0,
+            holder_count: 0,
+            fee_recipient: recipient_1.clone(),
+            registered_at: 0,
+        };
+        let profile_2 = super::CreatorProfile {
+            creator: creator_2.clone(),
+            handle: soroban_sdk::String::from_str(&env, "bob"),
+            supply: 0,
+            holder_count: 0,
+            fee_recipient: recipient_2.clone(),
+            registered_at: 0,
+        };
+
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .set(&super::constants::storage::creator(&creator_1), &profile_1);
+            env.storage()
+                .persistent()
+                .set(&super::constants::storage::creator(&creator_2), &profile_2);
+
+            let read_1 = super::read_creator_fee_recipient(&env, &creator_1);
+            let read_2 = super::read_creator_fee_recipient(&env, &creator_2);
+
+            assert_eq!(
+                read_1,
+                Some(recipient_1),
+                "creator 1 should have recipient 1"
+            );
+            assert_eq!(
+                read_2,
+                Some(recipient_2),
+                "creator 2 should have recipient 2"
+            );
+            assert_ne!(
+                read_1, read_2,
+                "two creators must not share the same recipient value"
+            );
+        });
     }
 }
 
