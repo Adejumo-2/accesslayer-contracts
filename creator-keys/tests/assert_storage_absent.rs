@@ -45,7 +45,10 @@ fn test_panics_when_key_present() {
         });
     }));
 
-    assert!(result.is_err(), "assert_storage_absent should panic when key is present");
+    assert!(
+        result.is_err(),
+        "assert_storage_absent should panic when key is present"
+    );
 }
 
 /// Confirm the panic message includes the debug representation of the key.

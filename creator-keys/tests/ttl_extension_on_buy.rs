@@ -56,9 +56,10 @@ fn test_buy_extends_creator_ttl() {
     assert_eq!(result, Ok(Ok(1)), "buy should succeed");
 
     let events = env.events().all();
-    let found = events.iter().rev().any(|(_, topics, _)| {
-        topics == ttl_extended_topics(&creator).into_val(&env)
-    });
+    let found = events
+        .iter()
+        .rev()
+        .any(|(_, topics, _)| topics == ttl_extended_topics(&creator).into_val(&env));
     assert!(found, "TTL extension event should be emitted after buy");
 
     let ttl_after = creator_ttl_remaining(&env, &contract_id, &creator);

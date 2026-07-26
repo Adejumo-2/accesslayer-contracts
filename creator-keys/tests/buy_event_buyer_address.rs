@@ -46,9 +46,7 @@ fn test_buy_event_buyer_address_matches_caller() {
         .iter()
         .rev()
         .find_map(|(_, topics, data)| {
-            let name: Symbol = topics
-                .get(events::TOPIC_EVENT_NAME_INDEX)?
-                .into_val(&env);
+            let name: Symbol = topics.get(events::TOPIC_EVENT_NAME_INDEX)?.into_val(&env);
             (name == events::BUY_EVENT_NAME).then_some(((), topics, data))
         })
         .expect("buy event should be present in event log");
@@ -105,9 +103,7 @@ fn test_buy_event_buyer_address_field_is_non_zero() {
         .iter()
         .rev()
         .find_map(|(_, topics, data)| {
-            let name: Symbol = topics
-                .get(events::TOPIC_EVENT_NAME_INDEX)?
-                .into_val(&env);
+            let name: Symbol = topics.get(events::TOPIC_EVENT_NAME_INDEX)?.into_val(&env);
             (name == events::BUY_EVENT_NAME).then_some(((), topics, data))
         })
         .expect("buy event should be present");

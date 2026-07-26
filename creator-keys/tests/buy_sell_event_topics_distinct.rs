@@ -36,10 +36,7 @@ const ALL_OTHER_EVENT_NAMES: &[Symbol] = &[
     events::TTL_EXTENDED_EVENT_NAME,
 ];
 
-fn extract_first_event_name(
-    env: &Env,
-    event_name_filter: Symbol,
-) -> Symbol {
+fn extract_first_event_name(env: &Env, event_name_filter: Symbol) -> Symbol {
     let event_log = env.events().all();
     let (_, topics, _) = event_log
         .iter()

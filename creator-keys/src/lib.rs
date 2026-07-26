@@ -3982,10 +3982,7 @@ mod tests {
 
     // --- write_creator_supply helper tests ---
 
-    use soroban_sdk::{
-        testutils::Address as _,
-        Address, Env, String,
-    };
+    use soroban_sdk::{testutils::Address as _, Address, Env, String};
 
     #[test]
     fn test_write_creator_supply_overwrites_existing_value() {
@@ -4013,7 +4010,10 @@ mod tests {
             super::write_creator_supply(&env, &creator, 3);
             super::read_creator_supply(&env, &creator)
         });
-        assert_eq!(supply, 3, "overwrite should replace previous value 5 with 3");
+        assert_eq!(
+            supply, 3,
+            "overwrite should replace previous value 5 with 3"
+        );
     }
 
     #[test]
