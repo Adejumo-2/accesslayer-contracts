@@ -397,6 +397,9 @@ pub fn keys_airdropped_topics(creator: &Address) -> (Symbol, Address) {
 /// Event name for treasury withdrawal by the protocol admin.
 pub const TREASURY_WITHDRAWAL_EVENT_NAME: Symbol = symbol_short!("treas_out");
 
+/// Event name for creator storage TTL extension.
+pub const TTL_EXTENDED_EVENT_NAME: Symbol = symbol_short!("ttl_ext");
+
 /// Stable field order for treasury withdrawal event payloads.
 pub const TREASURY_WITHDRAWAL_DATA_FIELDS: [&str; 4] =
     ["amount", "recipient", "remaining_balance", "ledger"];
@@ -421,6 +424,11 @@ pub struct TreasuryWithdrawalEvent {
 /// Shared treasury withdrawal event topics tuple.
 pub fn treasury_withdrawal_event_topics(recipient: &Address) -> (Symbol, Address) {
     (TREASURY_WITHDRAWAL_EVENT_NAME, recipient.clone())
+}
+
+/// Shared TTL extension event topics tuple.
+pub fn ttl_extended_topics(creator: &Address) -> (Symbol, Address) {
+    (TTL_EXTENDED_EVENT_NAME, creator.clone())
 }
 
 #[contracterror]
