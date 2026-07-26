@@ -38,9 +38,9 @@ fn test_buy_key_event_includes_payment_amount() {
         .find(|(_, topics, _)| {
             topics
                 .get(events::TOPIC_EVENT_NAME_INDEX)
-                .and_then(|v| {
+                .map(|v| {
                     let name: Symbol = v.into_val(&env);
-                    Some(name == events::BUY_EVENT_NAME)
+                    name == events::BUY_EVENT_NAME
                 })
                 .unwrap_or(false)
         })
@@ -87,9 +87,9 @@ fn test_buy_key_event_topics_include_creator_and_buyer() {
         .find(|(_, topics, _)| {
             topics
                 .get(events::TOPIC_EVENT_NAME_INDEX)
-                .and_then(|v| {
+                .map(|v| {
                     let name: Symbol = v.into_val(&env);
-                    Some(name == events::BUY_EVENT_NAME)
+                    name == events::BUY_EVENT_NAME
                 })
                 .unwrap_or(false)
         })

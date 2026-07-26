@@ -44,9 +44,9 @@ fn extract_first_event_name(env: &Env, event_name_filter: Symbol) -> Symbol {
         .find(|(_, topics, _)| {
             topics
                 .get(events::TOPIC_EVENT_NAME_INDEX)
-                .and_then(|v| {
+                .map(|v| {
                     let name: Symbol = v.into_val(env);
-                    Some(name == event_name_filter)
+                    name == event_name_filter
                 })
                 .unwrap_or(false)
         })

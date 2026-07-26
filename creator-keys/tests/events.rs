@@ -66,9 +66,9 @@ impl<'a> EventFixture<'a> {
             .find(|(_, topics, _)| {
                 topics
                     .get(events::TOPIC_EVENT_NAME_INDEX)
-                    .and_then(|v| {
+                    .map(|v| {
                         let name: Symbol = v.into_val(env);
-                        Some(name == events::BUY_EVENT_NAME || name == events::SELL_EVENT_NAME)
+                        name == events::BUY_EVENT_NAME || name == events::SELL_EVENT_NAME
                     })
                     .unwrap_or(false)
             })
@@ -95,9 +95,9 @@ impl<'a> EventFixture<'a> {
             .find(|(_, topics, _)| {
                 topics
                     .get(events::TOPIC_EVENT_NAME_INDEX)
-                    .and_then(|v| {
+                    .map(|v| {
                         let name: Symbol = v.into_val(env);
-                        Some(name == events::BUY_EVENT_NAME)
+                        name == events::BUY_EVENT_NAME
                     })
                     .unwrap_or(false)
             })
@@ -113,9 +113,9 @@ impl<'a> EventFixture<'a> {
             .find(|(_, topics, _)| {
                 topics
                     .get(events::TOPIC_EVENT_NAME_INDEX)
-                    .and_then(|v| {
+                    .map(|v| {
                         let name: Symbol = v.into_val(env);
-                        Some(name == events::SELL_EVENT_NAME)
+                        name == events::SELL_EVENT_NAME
                     })
                     .unwrap_or(false)
             })
