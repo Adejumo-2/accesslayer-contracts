@@ -60,7 +60,19 @@ impl<'a> EventFixture<'a> {
 
     fn last_trade_topics(&self, env: &Env) -> TradeTopics {
         let event_log = env.events().all();
-        let (_, topics, _) = event_log.last().unwrap();
+        let (_, topics, _) = event_log
+            .iter()
+            .rev()
+            .find(|(_, topics, _)| {
+                topics
+                    .get(events::TOPIC_EVENT_NAME_INDEX)
+                    .map(|v| {
+                        let name: Symbol = v.into_val(env);
+                        name == events::BUY_EVENT_NAME || name == events::SELL_EVENT_NAME
+                    })
+                    .unwrap_or(false)
+            })
+            .unwrap();
 
         TradeTopics {
             event_name: topics
@@ -77,13 +89,37 @@ impl<'a> EventFixture<'a> {
 
     fn last_buy_payload(&self, env: &Env) -> events::KeysBoughtEvent {
         let event_log = env.events().all();
-        let (_, _, data) = event_log.last().unwrap();
+        let (_, _, data) = event_log
+            .iter()
+            .rev()
+            .find(|(_, topics, _)| {
+                topics
+                    .get(events::TOPIC_EVENT_NAME_INDEX)
+                    .map(|v| {
+                        let name: Symbol = v.into_val(env);
+                        name == events::BUY_EVENT_NAME
+                    })
+                    .unwrap_or(false)
+            })
+            .unwrap();
         data.into_val(env)
     }
 
     fn last_sell_payload(&self, env: &Env) -> SellEventPayload {
         let event_log = env.events().all();
-        let (_, _, data) = event_log.last().unwrap();
+        let (_, _, data) = event_log
+            .iter()
+            .rev()
+            .find(|(_, topics, _)| {
+                topics
+                    .get(events::TOPIC_EVENT_NAME_INDEX)
+                    .map(|v| {
+                        let name: Symbol = v.into_val(env);
+                        name == events::SELL_EVENT_NAME
+                    })
+                    .unwrap_or(false)
+            })
+            .unwrap();
 
         SellEventPayload {
             supply: data.into_val(env),
