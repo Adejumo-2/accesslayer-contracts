@@ -2710,6 +2710,24 @@ impl CreatorKeysContract {
         checked_format_quote_response(price, creator_fee, protocol_fee, true)
     }
 
+    /// Read-only price query helper for a given creator and supply step.
+    ///
+    /// Computes the bonding curve price for `supply` without requiring authorization
+    /// or mutating contract state.
+    ///
+    /// Returns `Err(ContractError::KeyPriceNotSet)` if base key price is not set,
+    /// or `Err(ContractError::Overflow)` if arithmetic overflows or supply exceeds `u32::MAX`.
+    pub fn query_price(env: Env, creator: Address, supply: u64) -> Result<i128, ContractError> {
+        let supply_u32 = u32::try_from(supply).map_err(|_| ContractError::Overflow)?;
+        let base_price: i128 = env
+            .storage()
+            .persistent()
+            .get(&constants::storage::KEY_PRICE)
+            .ok_or(ContractError::KeyPriceNotSet)?;
+
+        compute_bonding_curve_price(&env, &creator, base_price, supply_u32)
+    }
+
     /// Read-only view: returns the total creator buyback cost for a given amount.
     ///
     /// The returned value is `base_price(amount) + protocol_fee(amount)` because the
