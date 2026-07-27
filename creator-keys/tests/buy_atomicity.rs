@@ -53,7 +53,10 @@ fn test_buy_supply_and_balance_consistent_in_same_block() {
     let supply = client.get_total_key_supply(&creator);
     let balance = client.get_key_balance(&creator, &buyer);
 
-    assert_eq!(supply, balance, "supply and balance must be equal after buys");
+    assert_eq!(
+        supply, balance,
+        "supply and balance must be equal after buys"
+    );
     assert_eq!(supply, 2);
     assert_eq!(balance, 2);
 }
