@@ -1006,7 +1006,6 @@ pub fn read_protocol_fee_bps(env: &Env) -> u32 {
         .protocol_bps
 }
 
-
 /// Validates that an address is not the Stellar zero address.
 ///
 /// The zero address (`GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF`)
@@ -4239,7 +4238,9 @@ mod tests {
     // --- read_protocol_fee_bps uninitialized panic unit tests (#646) ---
 
     #[test]
-    #[should_panic(expected = "read_protocol_fee_bps: contract is uninitialized (protocol_fee_bps not set)")]
+    #[should_panic(
+        expected = "read_protocol_fee_bps: contract is uninitialized (protocol_fee_bps not set)"
+    )]
     fn test_read_protocol_fee_bps_panics_when_uninitialized() {
         let env = Env::default();
         let contract_id = env.register(super::CreatorKeysContract, ());

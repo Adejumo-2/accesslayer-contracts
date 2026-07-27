@@ -11,7 +11,9 @@ use creator_keys::{read_protocol_fee_bps, CreatorKeysContract};
 use soroban_sdk::{testutils::Address as _, Env};
 
 #[test]
-#[should_panic(expected = "read_protocol_fee_bps: contract is uninitialized (protocol_fee_bps not set)")]
+#[should_panic(
+    expected = "read_protocol_fee_bps: contract is uninitialized (protocol_fee_bps not set)"
+)]
 fn test_read_protocol_fee_bps_panics_when_uninitialized() {
     let env = Env::default();
     let contract_id = env.register(CreatorKeysContract, ());
@@ -30,5 +32,8 @@ fn test_read_protocol_fee_bps_succeeds_when_initialized() {
     client.set_fee_config(&admin, &9000, &1000);
 
     let bps = env.as_contract(&contract_id, || read_protocol_fee_bps(&env));
-    assert_eq!(bps, 1000, "must return stored protocol fee bps when initialized");
+    assert_eq!(
+        bps, 1000,
+        "must return stored protocol fee bps when initialized"
+    );
 }
