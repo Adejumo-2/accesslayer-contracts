@@ -4125,6 +4125,92 @@ mod tests {
             "read after zero write should return 0 without error"
         );
     }
+
+    // --- read_creator_supply zero-supply unit tests (#625) ---
+    //
+    // Distinguishes a creator that was never written (no profile in storage)
+    // from a creator whose supply was explicitly written as 0 (profile
+    // present, supply == 0), and confirms every path returns 0 without
+    // panicking or returning an error.
+
+    #[test]
+    fn test_read_creator_supply_returns_zero_for_creator_never_written() {
+        let env = Env::default();
+        let creator = Address::generate(&env);
+        let contract_id = env.register(super::CreatorKeysContract, ());
+
+        let supply = env.as_contract(&contract_id, || super::read_creator_supply(&env, &creator));
+
+        assert_eq!(
+            supply, 0,
+            "a creator with no stored profile should read as 0"
+        );
+    }
+
+    #[test]
+    fn test_read_creator_supply_returns_zero_after_explicit_zero_write() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(super::CreatorKeysContract, ());
+        let client = super::CreatorKeysContractClient::new(&env, &contract_id);
+        let creator = Address::generate(&env);
+
+        client.register_creator(
+            &super::RegisterCreatorParams {
+                creator: creator.clone(),
+                handle: String::from_str(&env, "zerowriter"),
+            },
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+        );
+
+        let supply = env.as_contract(&contract_id, || {
+            super::write_creator_supply(&env, &creator, 0);
+            super::read_creator_supply(&env, &creator)
+        });
+
+        assert_eq!(
+            supply, 0,
+            "explicitly writing 0 should read back as 0, just like the never-written case"
+        );
+    }
+
+    #[test]
+    fn test_read_creator_supply_returns_zero_after_overwrite_from_nonzero() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(super::CreatorKeysContract, ());
+        let client = super::CreatorKeysContractClient::new(&env, &contract_id);
+        let creator = Address::generate(&env);
+
+        client.register_creator(
+            &super::RegisterCreatorParams {
+                creator: creator.clone(),
+                handle: String::from_str(&env, "overwritetozero"),
+            },
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+        );
+
+        let supply = env.as_contract(&contract_id, || {
+            super::write_creator_supply(&env, &creator, 5);
+            super::write_creator_supply(&env, &creator, 0);
+            super::read_creator_supply(&env, &creator)
+        });
+
+        assert_eq!(
+            supply, 0,
+            "overwriting a non-zero supply with 0 should read back as 0, not the stale value 5"
+        );
+    }
 }
 
 #[cfg(test)]
