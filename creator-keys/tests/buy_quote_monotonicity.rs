@@ -381,6 +381,7 @@ fn test_buy_quote_updates_after_fee_config_mutation() {
 
     // Update fee config: 50% creator, 50% protocol
     let admin = Address::generate(&env);
+    client.set_protocol_admin(&admin, &admin);
     client.set_fee_config(&admin, &5000u32, &5000u32);
 
     // Get quote after fee config update

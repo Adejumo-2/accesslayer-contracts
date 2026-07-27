@@ -14,6 +14,7 @@ fn test_fee_config_updated_event_emitted() {
     let env = test_env_with_auths();
     let (client, _) = register_creator_keys(&env);
     let admin = Address::generate(&env);
+    client.set_protocol_admin(&admin, &admin);
 
     // Initial set (no old config)
     client.set_fee_config(&admin, &9000, &1000);

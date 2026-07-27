@@ -78,6 +78,7 @@ fn test_fee_config_update_does_not_affect_other_creator() {
 
     // Update global fee config
     let admin = Address::generate(&env);
+    client.set_protocol_admin(&admin, &admin);
     client.set_fee_config(&admin, &8000u32, &2000u32);
 
     // Both creators should see the new fee config (since it's global)

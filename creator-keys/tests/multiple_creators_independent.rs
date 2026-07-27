@@ -67,6 +67,7 @@ fn test_fee_bps_update_for_a_does_not_change_b() {
     assert_eq!(fee_b_before.creator_bps, 9_000);
 
     let admin = soroban_sdk::Address::generate(&env);
+    client.set_protocol_admin(&admin, &admin);
     client.set_fee_config(&admin, &8_000u32, &2_000u32);
 
     let fee_a_after = client.get_creator_fee_config(&creator_a);
