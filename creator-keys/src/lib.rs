@@ -1828,9 +1828,14 @@ impl CreatorKeysContract {
         }
         accrue_sell_trade_fees(&env, &creator, price)?;
 
+        let sell_event_data = events::KeysSoldEvent {
+            creator_id: creator.clone(),
+            supply: profile.supply,
+        };
+
         env.events().publish(
             (events::SELL_EVENT_NAME, creator.clone(), seller),
-            profile.supply,
+            sell_event_data,
         );
 
         // Extend TTL for creator storage after successful sell

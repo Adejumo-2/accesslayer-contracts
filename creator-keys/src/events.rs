@@ -82,7 +82,7 @@ pub const BUY_EVENT_DATA_FIELDS: [&str; 5] =
     ["buyer", "creator_id", "quantity", "price_paid", "ledger"];
 
 /// Stable field order for sell event payloads.
-pub const SELL_EVENT_DATA_FIELDS: [&str; 1] = ["supply"];
+pub const SELL_EVENT_DATA_FIELDS: [&str; 2] = ["creator_id", "supply"];
 
 /// Stable field order for buyback event payloads.
 pub const BUYBACK_EVENT_DATA_FIELDS: [&str; 5] =
@@ -146,6 +146,16 @@ pub struct KeysBoughtEvent {
     pub price_paid: i128,
     /// Ledger sequence number at the time of the purchase.
     pub ledger: u32,
+}
+
+/// Stable sell event payload for downstream indexers.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct KeysSoldEvent {
+    /// Address of the creator whose keys are being sold.
+    pub creator_id: Address,
+    /// Number of keys in circulation after the sale.
+    pub supply: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

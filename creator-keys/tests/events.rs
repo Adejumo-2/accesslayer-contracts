@@ -20,6 +20,7 @@ struct TradeTopics {
 }
 
 struct SellEventPayload {
+    creator_id: Address,
     supply: u32,
 }
 
@@ -121,8 +122,10 @@ impl<'a> EventFixture<'a> {
             })
             .unwrap();
 
+        let event: events::KeysSoldEvent = data.into_val(env);
         SellEventPayload {
-            supply: data.into_val(env),
+            creator_id: event.creator_id,
+            supply: event.supply,
         }
     }
 }
@@ -400,6 +403,7 @@ fn test_sell_key_event_payload_fields_are_validated_from_fixture() {
     assert_eq!(topics.event_name, events::SELL_EVENT_NAME);
     assert_eq!(topics.creator, fixture.creator);
     assert_eq!(topics.actor, seller);
+    assert_eq!(payload.creator_id, fixture.creator);
     assert_eq!(payload.supply, 1);
 }
 
@@ -420,10 +424,11 @@ fn test_sell_key_event_payload_tracks_zero_supply_after_last_sale() {
     assert_eq!(topics.event_name, events::SELL_EVENT_NAME);
     assert_eq!(topics.creator, fixture.creator);
     assert_eq!(topics.actor, seller);
+    assert_eq!(payload.creator_id, fixture.creator);
     assert_eq!(payload.supply, 0);
 }
 
 #[test]
 fn test_sell_key_event_payload_field_order_is_documented() {
-    assert_eq!(events::SELL_EVENT_DATA_FIELDS, ["supply"]);
+    assert_eq!(events::SELL_EVENT_DATA_FIELDS, ["creator_id", "supply"]);
 }
