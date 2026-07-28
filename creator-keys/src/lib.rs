@@ -994,6 +994,18 @@ fn read_protocol_fee_config(env: &Env) -> Option<fee::FeeConfig> {
         .get(&constants::storage::FEE_CONFIG)
 }
 
+/// Reads the protocol fee basis points from storage, panicking if uninitialized.
+///
+/// # Panics
+///
+/// Panics with a descriptive message if called before contract initialization
+/// (when no fee configuration has been stored).
+pub fn read_protocol_fee_bps(env: &Env) -> u32 {
+    read_protocol_fee_config(env)
+        .expect("read_protocol_fee_bps: contract is uninitialized (protocol_fee_bps not set)")
+        .protocol_bps
+}
+
 /// Validates that an address is not the Stellar zero address.
 ///
 /// The zero address (`GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF`)
@@ -4221,6 +4233,35 @@ mod tests {
             supply, 0,
             "overwriting a non-zero supply with 0 should read back as 0, not the stale value 5"
         );
+    }
+
+    // --- read_protocol_fee_bps uninitialized panic unit tests (#646) ---
+
+    #[test]
+    #[should_panic(
+        expected = "read_protocol_fee_bps: contract is uninitialized (protocol_fee_bps not set)"
+    )]
+    fn test_read_protocol_fee_bps_panics_when_uninitialized() {
+        let env = Env::default();
+        let contract_id = env.register(super::CreatorKeysContract, ());
+
+        env.as_contract(&contract_id, || {
+            super::read_protocol_fee_bps(&env);
+        });
+    }
+
+    #[test]
+    fn test_read_protocol_fee_bps_succeeds_when_initialized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(super::CreatorKeysContract, ());
+        let client = super::CreatorKeysContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+
+        client.set_fee_config(&admin, &9000, &1000);
+
+        let bps = env.as_contract(&contract_id, || super::read_protocol_fee_bps(&env));
+        assert_eq!(bps, 1000, "must return stored protocol_fee_bps");
     }
 }
 
