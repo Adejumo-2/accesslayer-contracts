@@ -14,7 +14,7 @@ use contract_test_env::{
 use soroban_sdk::testutils::Address as _;
 
 const PROTOCOL_BPS: u32 = 500; // 5% protocol fee
-const CREATOR_BPS: u32 = 200;  // 2% creator fee
+const CREATOR_BPS: u32 = 200; // 2% creator fee
 
 #[test]
 fn test_buy_splits_fees_correctly_between_treasury_and_creator() {
@@ -43,7 +43,7 @@ fn test_buy_splits_fees_correctly_between_treasury_and_creator() {
     // Fetch quote and verify expected component breakdown
     let quote = client.get_buy_quote(&creator);
     let expected_protocol_fee = (gross_cost * PROTOCOL_BPS as i128) / 10_000; // 5% = 5,000,000 stroops
-    let expected_creator_fee = (gross_cost * CREATOR_BPS as i128) / 10_000;  // 2% = 2,000,000 stroops
+    let expected_creator_fee = (gross_cost * CREATOR_BPS as i128) / 10_000; // 2% = 2,000,000 stroops
     let expected_total_charge = gross_cost + expected_protocol_fee + expected_creator_fee; // 107,000,000 stroops
 
     assert_eq!(quote.price, gross_cost, "quote price equals gross cost");
