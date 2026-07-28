@@ -93,7 +93,11 @@ fn test_holder_balance_key_argument_order_near_identical_addresses() {
     // Sanity check: confirm the two addresses are indeed very close.
     let str_a: std::string::String = ADDR_A_STR.into();
     let str_b: std::string::String = ADDR_B_STR.into();
-    let diff_count = str_a.chars().zip(str_b.chars()).filter(|(a, b)| a != b).count();
+    let diff_count = str_a
+        .chars()
+        .zip(str_b.chars())
+        .filter(|(a, b)| a != b)
+        .count();
     assert_eq!(
         diff_count, 2,
         "test invariant: ADDR_A and ADDR_B must differ by exactly 2 characters (the \
@@ -140,8 +144,7 @@ fn test_holder_balance_key_storage_isolation_swapped_args() {
     env.as_contract(&contract_id, || {
         let value: Option<u32> = env.storage().persistent().get(&key_ba);
         assert_eq!(
-            value,
-            None,
+            value, None,
             "reading holder_balance_key(B, A) must not return a value that was \
              written under holder_balance_key(A, B) — storage keys must be isolated \
              when arguments are swapped"
