@@ -4003,6 +4003,119 @@ mod tests {
         });
     }
 
+    #[test]
+    fn test_write_creator_fee_recipient_triple_overwrite_replaces_previous() {
+        use soroban_sdk::{testutils::Address as _, Address, Env};
+
+        let env = Env::default();
+        let contract_id = env.register(super::CreatorKeysContract, ());
+        let creator = Address::generate(&env);
+        let recipient_a = Address::generate(&env);
+        let recipient_b = Address::generate(&env);
+        let recipient_c = Address::generate(&env);
+
+        let profile = super::CreatorProfile {
+            creator: creator.clone(),
+            handle: soroban_sdk::String::from_str(&env, "alice"),
+            supply: 0,
+            holder_count: 0,
+            fee_recipient: recipient_a.clone(),
+            registered_at: 0,
+        };
+
+        env.as_contract(&contract_id, || {
+            // Write initial profile with recipient A
+            env.storage()
+                .persistent()
+                .set(&super::constants::storage::creator(&creator), &profile);
+
+            // First overwrite: A -> B
+            super::write_creator_fee_recipient(&env, &creator, &recipient_b);
+            let read_after_b = super::read_creator_fee_recipient(&env, &creator);
+            assert_eq!(
+                read_after_b.clone(),
+                Some(recipient_b.clone()),
+                "should return address B after overwrite A -> B"
+            );
+            assert_ne!(
+                read_after_b,
+                Some(recipient_a.clone()),
+                "should no longer return address A after B overwrite"
+            );
+
+            // Second overwrite: B -> C
+            super::write_creator_fee_recipient(&env, &creator, &recipient_c);
+            let read_after_c = super::read_creator_fee_recipient(&env, &creator);
+            assert_eq!(
+                read_after_c.clone(),
+                Some(recipient_c.clone()),
+                "should return address C after overwrite B -> C"
+            );
+            assert_ne!(
+                read_after_c.clone(),
+                Some(recipient_b.clone()),
+                "should no longer return address B after C overwrite"
+            );
+            assert_ne!(
+                read_after_c,
+                Some(recipient_a.clone()),
+                "should no longer return address A after C overwrite"
+            );
+        });
+    }
+
+    #[test]
+    fn test_write_creator_fee_recipient_replaces_single_storage_entry() {
+        use soroban_sdk::{testutils::Address as _, Address, Env};
+
+        let env = Env::default();
+        let contract_id = env.register(super::CreatorKeysContract, ());
+        let creator = Address::generate(&env);
+        let recipient_a = Address::generate(&env);
+        let recipient_b = Address::generate(&env);
+        let recipient_c = Address::generate(&env);
+
+        let profile = super::CreatorProfile {
+            creator: creator.clone(),
+            handle: soroban_sdk::String::from_str(&env, "alice"),
+            supply: 0,
+            holder_count: 0,
+            fee_recipient: recipient_a.clone(),
+            registered_at: 0,
+        };
+
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .set(&super::constants::storage::creator(&creator), &profile);
+
+            // Overwrite twice
+            super::write_creator_fee_recipient(&env, &creator, &recipient_b);
+            super::write_creator_fee_recipient(&env, &creator, &recipient_c);
+
+            // Read the full profile directly — the fee_recipient field must be C,
+            // not an accumulation of all three addresses.
+            let stored: super::CreatorProfile = env
+                .storage()
+                .persistent()
+                .get(&super::constants::storage::creator(&creator))
+                .expect("creator profile should exist");
+
+            assert_eq!(
+                stored.fee_recipient, recipient_c,
+                "profile.fee_recipient should be the most recently written address (C)"
+            );
+            assert_ne!(
+                stored.fee_recipient, recipient_a,
+                "profile.fee_recipient should not be the overwritten address A"
+            );
+            assert_ne!(
+                stored.fee_recipient, recipient_b,
+                "profile.fee_recipient should not be the overwritten address B"
+            );
+        });
+    }
+
     // --- write_creator_supply helper tests ---
 
     use soroban_sdk::{testutils::Address as _, Address, Env, String};
