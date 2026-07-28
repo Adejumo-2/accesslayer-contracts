@@ -117,7 +117,7 @@ pub mod fee {
         let Some(sum) = creator_bps.checked_add(protocol_bps) else {
             return false;
         };
-        if sum != BPS_MAX {
+        if sum == 0 || sum > BPS_MAX {
             return false;
         }
         true
@@ -131,7 +131,7 @@ pub mod fee {
         let Some(sum) = creator_bps.checked_add(protocol_bps) else {
             return Err(ContractError::InvalidFeeConfig);
         };
-        if sum != BPS_MAX {
+        if sum == 0 || sum > BPS_MAX {
             return Err(ContractError::InvalidFeeConfig);
         }
         Ok(())
@@ -139,14 +139,19 @@ pub mod fee {
 
     /// Computes the fee split for a given total amount.
     ///
-    /// Returns `(creator_amount, protocol_amount)`. Remainder from integer division
-    /// is assigned to the creator. Ensures creator_amount + protocol_amount == total.
-    pub fn compute_fee_split(total: i128, _creator_bps: u32, protocol_bps: u32) -> (i128, i128) {
+    /// Returns `(creator_amount, protocol_amount)`. When creator_bps + protocol_bps == BPS_MAX,
+    /// remainder from integer division is assigned to the creator so creator_amount + protocol_amount == total.
+    /// Otherwise, each fee is computed independently via basis points.
+    pub fn compute_fee_split(total: i128, creator_bps: u32, protocol_bps: u32) -> (i128, i128) {
         if total <= 0 {
             return (0, 0);
         }
         let protocol_amount = (total * protocol_bps as i128) / BPS_MAX as i128;
-        let creator_amount = total - protocol_amount;
+        let creator_amount = if creator_bps.saturating_add(protocol_bps) == BPS_MAX {
+            total - protocol_amount
+        } else {
+            (total * creator_bps as i128) / BPS_MAX as i128
+        };
         (creator_amount, protocol_amount)
     }
 
@@ -191,14 +196,18 @@ pub mod fee {
     /// Computes the fee split safely, returning `None` if multiplication or subtraction overflows.
     pub fn checked_compute_fee_split(
         total: i128,
-        _creator_bps: u32,
+        creator_bps: u32,
         protocol_bps: u32,
     ) -> Option<(i128, i128)> {
         if total <= 0 {
             return Some((0, 0));
         }
         let protocol_amount = apply_percentage_fee(total, protocol_bps)?;
-        let creator_amount = checked_sub_i128(total, protocol_amount)?;
+        let creator_amount = if creator_bps.checked_add(protocol_bps) == Some(BPS_MAX) {
+            checked_sub_i128(total, protocol_amount)?
+        } else {
+            apply_percentage_fee(total, creator_bps)?
+        };
         Some((creator_amount, protocol_amount))
     }
 
