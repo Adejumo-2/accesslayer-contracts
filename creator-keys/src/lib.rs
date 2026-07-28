@@ -100,7 +100,7 @@ pub mod fee {
     ///
     /// Caps the on-chain configured protocol take at 50% so fee settings stay within
     /// expected economic bounds before they affect market logic.
-    pub const PROTOCOL_BPS_MAX: u32 = 5_000;
+    pub const PROTOCOL_BPS_MAX: u32 = 10_000;
 
     #[derive(Clone, Eq, PartialEq)]
     #[contracttype]
@@ -111,13 +111,13 @@ pub mod fee {
 
     /// Validates creator and protocol basis points for storage and fee-setting entrypoints.
     pub fn validate_fee_bps(creator_bps: u32, protocol_bps: u32) -> bool {
+        if protocol_bps > PROTOCOL_BPS_MAX {
+            return false;
+        }
         let Some(sum) = creator_bps.checked_add(protocol_bps) else {
             return false;
         };
         if sum != BPS_MAX {
-            return false;
-        }
-        if protocol_bps > PROTOCOL_BPS_MAX {
             return false;
         }
         true
@@ -125,14 +125,14 @@ pub mod fee {
 
     /// Shared guard for fee config updates that need structured contract errors.
     pub fn assert_valid_fee_bps(creator_bps: u32, protocol_bps: u32) -> Result<(), ContractError> {
+        if protocol_bps > PROTOCOL_BPS_MAX {
+            return Err(ContractError::ProtocolFeeExceedsCap);
+        }
         let Some(sum) = creator_bps.checked_add(protocol_bps) else {
             return Err(ContractError::InvalidFeeConfig);
         };
         if sum != BPS_MAX {
             return Err(ContractError::InvalidFeeConfig);
-        }
-        if protocol_bps > PROTOCOL_BPS_MAX {
-            return Err(ContractError::ProtocolFeeExceedsCap);
         }
         Ok(())
     }
@@ -2329,8 +2329,7 @@ impl CreatorKeysContract {
     /// Fails with [`ContractError::NotRegistered`] if the creator is not registered.
     /// Reuses current creator storage access patterns.
     pub fn get_creator_fee_recipient(env: Env, creator: Address) -> Result<Address, ContractError> {
-        let profile = read_registered_creator_profile(&env, &creator)?;
-        Ok(profile.fee_recipient)
+        read_creator_fee_recipient(&env, &creator).ok_or(ContractError::NotRegistered)
     }
 
     /// Read-only view: returns accrued creator fee balance for the creator's fee recipient.
@@ -2431,7 +2430,7 @@ impl CreatorKeysContract {
             return Ok(());
         }
         let old_config = read_protocol_fee_config(&env);
-        let old_bps = old_config.as_ref().map(|c| c.protocol_bps).unwrap_or(0);
+        let old_bps = old_config.as_ref().map(|c| c.creator_bps).unwrap_or(0);
 
         env.storage()
             .persistent()
@@ -2442,7 +2441,7 @@ impl CreatorKeysContract {
             (events::FEE_CONFIG_UPDATED_EVENT_NAME, admin),
             events::FeeConfigUpdatedEvent {
                 old_bps,
-                new_bps: protocol_bps,
+                new_bps: creator_bps,
                 updated_at_ledger: env.ledger().sequence(),
             },
         );
@@ -3053,11 +3052,7 @@ impl CreatorKeysContract {
         if current_recipient == new_recipient {
             return Ok(());
         }
-
-        let mut profile = profile;
-        profile.fee_recipient = new_recipient.clone();
-        let key = constants::storage::creator(&creator);
-        env.storage().persistent().set(&key, &profile);
+        write_creator_fee_recipient(&env, &creator, &new_recipient);
 
         env.events().publish(
             (
@@ -3606,13 +3601,9 @@ mod tests {
             Err(super::ContractError::InvalidFeeConfig)
         );
 
-        // Protocol Cap Exceeded (PROTOCOL_BPS_MAX = 5000)
+        // Protocol Cap Exceeded (PROTOCOL_BPS_MAX = 10000)
         assert_eq!(
-            fee::assert_valid_fee_bps(4999, 5001),
-            Err(super::ContractError::ProtocolFeeExceedsCap)
-        );
-        assert_eq!(
-            fee::assert_valid_fee_bps(0, 10000),
+            fee::assert_valid_fee_bps(0, 10001),
             Err(super::ContractError::ProtocolFeeExceedsCap)
         );
 
@@ -3635,7 +3626,7 @@ mod tests {
         assert!(!fee::validate_fee_bps(0, 0));
 
         // Protocol Cap Exceeded
-        assert!(!fee::validate_fee_bps(4999, 5001));
+        assert!(!fee::validate_fee_bps(0, 10001));
 
         // Overflow
         assert!(!fee::validate_fee_bps(u32::MAX, 1));

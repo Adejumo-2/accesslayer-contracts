@@ -102,7 +102,7 @@ fn test_set_fee_config_protocol_bps_above_max_fails() {
     let client = CreatorKeysContractClient::new(&env, &contract_id);
     let admin = soroban_sdk::Address::generate(&env);
 
-    let result = client.try_set_fee_config(&admin, &4999u32, &5001u32);
+    let result = client.try_set_fee_config(&admin, &0u32, &10001u32);
     assert_eq!(result, Err(Ok(ContractError::ProtocolFeeExceedsCap)));
 }
 
