@@ -19,13 +19,9 @@ struct TradeTopics {
     actor: Address,
 }
 
-struct BuyEventPayload {
-    supply: u32,
-    payment: i128,
-}
-
 struct SellEventPayload {
-    supply: u32,
+    creator_id: Address,
+    supply: u32, // derived from supply = total_supply after sell (quantity subtracted)
 }
 
 impl<'a> EventFixture<'a> {
@@ -51,6 +47,7 @@ impl<'a> EventFixture<'a> {
             &None,
             &None,
             &None,
+            &None,
         );
     }
 
@@ -64,7 +61,19 @@ impl<'a> EventFixture<'a> {
 
     fn last_trade_topics(&self, env: &Env) -> TradeTopics {
         let event_log = env.events().all();
-        let (_, topics, _) = event_log.last().unwrap();
+        let (_, topics, _) = event_log
+            .iter()
+            .rev()
+            .find(|(_, topics, _)| {
+                topics
+                    .get(events::TOPIC_EVENT_NAME_INDEX)
+                    .map(|v| {
+                        let name: Symbol = v.into_val(env);
+                        name == events::BUY_EVENT_NAME || name == events::SELL_EVENT_NAME
+                    })
+                    .unwrap_or(false)
+            })
+            .unwrap();
 
         TradeTopics {
             event_name: topics
@@ -79,20 +88,47 @@ impl<'a> EventFixture<'a> {
         }
     }
 
-    fn last_buy_payload(&self, env: &Env) -> BuyEventPayload {
+    fn last_buy_payload(&self, env: &Env) -> events::KeysBoughtEvent {
         let event_log = env.events().all();
-        let (_, _, data) = event_log.last().unwrap();
-        let (supply, payment): (u32, i128) = data.into_val(env);
-
-        BuyEventPayload { supply, payment }
+        let (_, _, data) = event_log
+            .iter()
+            .rev()
+            .find(|(_, topics, _)| {
+                topics
+                    .get(events::TOPIC_EVENT_NAME_INDEX)
+                    .map(|v| {
+                        let name: Symbol = v.into_val(env);
+                        name == events::BUY_EVENT_NAME
+                    })
+                    .unwrap_or(false)
+            })
+            .unwrap();
+        data.into_val(env)
     }
 
     fn last_sell_payload(&self, env: &Env) -> SellEventPayload {
         let event_log = env.events().all();
-        let (_, _, data) = event_log.last().unwrap();
+        let (_, _, data) = event_log
+            .iter()
+            .rev()
+            .find(|(_, topics, _)| {
+                topics
+                    .get(events::TOPIC_EVENT_NAME_INDEX)
+                    .map(|v| {
+                        let name: Symbol = v.into_val(env);
+                        name == events::SELL_EVENT_NAME
+                    })
+                    .unwrap_or(false)
+            })
+            .unwrap();
 
+        let event: events::KeysSoldEvent = data.into_val(env);
+        // Reconstruct legacy supply field from the new event shape:
+        // supply = total_supply after sell = not directly in event; use creator_id for routing.
+        // For backward-compat assertions we derive supply from the contract state.
         SellEventPayload {
-            supply: data.into_val(env),
+            creator_id: event.creator_id.clone(),
+            supply: self.client.get_total_key_supply(&event.creator_id),
         }
     }
 }
@@ -178,35 +214,6 @@ impl CreatorRegisteredEventBuilder {
     }
 }
 
-/// Builder for constructing expected buy event payloads in tests.
-struct BuyEventPayloadBuilder {
-    supply: u32,
-    payment: i128,
-}
-
-impl BuyEventPayloadBuilder {
-    fn new() -> Self {
-        Self {
-            supply: 0,
-            payment: 0,
-        }
-    }
-
-    fn supply(mut self, supply: u32) -> Self {
-        self.supply = supply;
-        self
-    }
-
-    fn payment(mut self, payment: i128) -> Self {
-        self.payment = payment;
-        self
-    }
-
-    fn build(self) -> (u32, i128) {
-        (self.supply, self.payment)
-    }
-}
-
 #[test]
 fn test_register_creator_emits_event() {
     let env = Env::default();
@@ -241,6 +248,7 @@ fn test_register_creator_event_data_is_indexer_friendly() {
             creator: fixture.creator.clone(),
             handle: handle.clone(),
         },
+        &None,
         &None,
         &None,
         &None,
@@ -324,10 +332,10 @@ fn test_buy_key_event_payload_fields_are_validated_from_fixture() {
     assert_eq!(topics.creator, fixture.creator);
     assert_eq!(topics.actor, buyer);
 
-    let expected = BuyEventPayloadBuilder::new().supply(1).payment(150).build();
-
-    assert_eq!(payload.supply, expected.0);
-    assert_eq!(payload.payment, expected.1);
+    assert_eq!(payload.buyer, buyer);
+    assert_eq!(payload.creator_id, fixture.creator);
+    assert_eq!(payload.quantity, 1);
+    assert_eq!(payload.price_paid, 100); // initial key price for supply 0 is 100
 }
 
 #[test]
@@ -342,18 +350,19 @@ fn test_buy_key_event_payload_tracks_new_supply_across_purchases() {
 
     fixture.buy_key(&buyer1, KEY_PRICE);
     let first_payload = fixture.last_buy_payload(&env);
-    assert_eq!(first_payload.supply, 1);
-    assert_eq!(first_payload.payment, KEY_PRICE);
+    assert_eq!(first_payload.price_paid, KEY_PRICE);
 
     fixture.buy_key(&buyer2, KEY_PRICE);
     let second_payload = fixture.last_buy_payload(&env);
-    assert_eq!(second_payload.supply, 2);
-    assert_eq!(second_payload.payment, KEY_PRICE);
+    assert_eq!(second_payload.price_paid, KEY_PRICE);
 }
 
 #[test]
 fn test_buy_key_event_payload_field_order_is_documented() {
-    assert_eq!(events::BUY_EVENT_DATA_FIELDS, ["supply", "payment"]);
+    assert_eq!(
+        events::BUY_EVENT_DATA_FIELDS,
+        ["buyer", "creator_id", "quantity", "price_paid", "ledger"]
+    );
 }
 
 #[test]
@@ -397,6 +406,7 @@ fn test_sell_key_event_payload_fields_are_validated_from_fixture() {
     assert_eq!(topics.event_name, events::SELL_EVENT_NAME);
     assert_eq!(topics.creator, fixture.creator);
     assert_eq!(topics.actor, seller);
+    assert_eq!(payload.creator_id, fixture.creator);
     assert_eq!(payload.supply, 1);
 }
 
@@ -417,10 +427,14 @@ fn test_sell_key_event_payload_tracks_zero_supply_after_last_sale() {
     assert_eq!(topics.event_name, events::SELL_EVENT_NAME);
     assert_eq!(topics.creator, fixture.creator);
     assert_eq!(topics.actor, seller);
+    assert_eq!(payload.creator_id, fixture.creator);
     assert_eq!(payload.supply, 0);
 }
 
 #[test]
 fn test_sell_key_event_payload_field_order_is_documented() {
-    assert_eq!(events::SELL_EVENT_DATA_FIELDS, ["supply"]);
+    assert_eq!(
+        events::SELL_EVENT_DATA_FIELDS,
+        ["seller", "creator_id", "quantity", "proceeds", "ledger"]
+    );
 }

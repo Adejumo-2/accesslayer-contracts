@@ -30,6 +30,7 @@ fn creator_can_create_poll_and_view_empty_result() {
         &None,
         &None,
         &None,
+        &None,
     );
 
     let question = String::from_str(&env, "Should we launch premium content?");
@@ -62,6 +63,7 @@ fn holder_vote_uses_liquid_key_balance_as_weight() {
             creator: creator.clone(),
             handle: String::from_str(&env, "alice"),
         },
+        &None,
         &None,
         &None,
         &None,
@@ -108,6 +110,7 @@ fn changing_vote_before_expiry_updates_tally() {
         &None,
         &None,
         &None,
+        &None,
     );
 
     let holder = Address::generate(&env);
@@ -132,6 +135,57 @@ fn changing_vote_before_expiry_updates_tally() {
 }
 
 #[test]
+fn changing_vote_before_expiry_removes_previous_weight_without_double_counting() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(CreatorKeysContract, ());
+    let client = CreatorKeysContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.set_key_price(&admin, &100);
+
+    let creator = Address::generate(&env);
+    client.register_creator(
+        &creator_keys::RegisterCreatorParams {
+            creator: creator.clone(),
+            handle: String::from_str(&env, "alice"),
+        },
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+    );
+
+    let holder = Address::generate(&env);
+    for _ in 0..10 {
+        client.buy_key(&creator, &holder, &100, &None);
+    }
+
+    let poll_id = client.create_poll(
+        &creator,
+        &String::from_str(&env, "Pick one"),
+        &poll_options(&env),
+        &10,
+    );
+
+    client.cast_vote(&creator, &holder, &poll_id, &0);
+
+    let after_first_vote = client.get_poll_result(&creator, &poll_id);
+    assert_eq!(after_first_vote.vote_counts.get(0).unwrap(), 10);
+    assert_eq!(after_first_vote.vote_counts.get(1).unwrap(), 0);
+    assert_eq!(after_first_vote.total_weight, 10);
+
+    client.cast_vote(&creator, &holder, &poll_id, &1);
+
+    let after_revote = client.get_poll_result(&creator, &poll_id);
+    assert_eq!(after_revote.vote_counts.get(0).unwrap(), 0);
+    assert_eq!(after_revote.vote_counts.get(1).unwrap(), 10);
+    assert_eq!(after_revote.total_weight, 10);
+}
+
+#[test]
 fn vote_after_expiry_reverts_with_poll_expired() {
     let env = Env::default();
     env.mock_all_auths();
@@ -147,6 +201,7 @@ fn vote_after_expiry_reverts_with_poll_expired() {
             creator: creator.clone(),
             handle: String::from_str(&env, "alice"),
         },
+        &None,
         &None,
         &None,
         &None,
@@ -193,6 +248,7 @@ fn non_holder_vote_reverts_with_not_a_holder() {
         &None,
         &None,
         &None,
+        &None,
     );
 
     let non_holder = Address::generate(&env);
@@ -223,6 +279,7 @@ fn zero_liquid_balance_after_sell_reverts_with_not_a_holder() {
             creator: creator.clone(),
             handle: String::from_str(&env, "alice"),
         },
+        &None,
         &None,
         &None,
         &None,
@@ -275,6 +332,7 @@ fn zero_liquid_balance_after_transfer_reverts_with_not_a_holder() {
             creator: creator.clone(),
             handle: String::from_str(&env, "alice"),
         },
+        &None,
         &None,
         &None,
         &None,
@@ -334,6 +392,7 @@ fn staked_keys_zero_liquid_balance_rejected() {
         &None,
         &None,
         &None,
+        &None,
     );
 
     let holder = Address::generate(&env);
@@ -378,6 +437,7 @@ fn invalid_vote_option_reverts() {
             creator: creator.clone(),
             handle: String::from_str(&env, "alice"),
         },
+        &None,
         &None,
         &None,
         &None,

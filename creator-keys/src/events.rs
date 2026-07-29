@@ -49,6 +49,9 @@ pub const TRANSFER_EVENT_NAME: Symbol = symbol_short!("transfer");
 /// Event name for creator key buyback.
 pub const BUYBACK_EVENT_NAME: Symbol = symbol_short!("buyback");
 
+/// Event name for referral fee earned.
+pub const REFERRAL_FEE_EARNED_EVENT_NAME: Symbol = symbol_short!("referral");
+
 /// Event name for governance poll creation.
 pub const POLL_CREATED_EVENT_NAME: Symbol = symbol_short!("poll_new");
 
@@ -75,10 +78,12 @@ pub const REGISTER_EVENT_DATA_FIELDS: [&str; 6] = [
 ];
 
 /// Stable field order for buy event payloads.
-pub const BUY_EVENT_DATA_FIELDS: [&str; 2] = ["supply", "payment"];
+pub const BUY_EVENT_DATA_FIELDS: [&str; 5] =
+    ["buyer", "creator_id", "quantity", "price_paid", "ledger"];
 
 /// Stable field order for sell event payloads.
-pub const SELL_EVENT_DATA_FIELDS: [&str; 1] = ["supply"];
+pub const SELL_EVENT_DATA_FIELDS: [&str; 5] =
+    ["seller", "creator_id", "quantity", "proceeds", "ledger"];
 
 /// Stable field order for buyback event payloads.
 pub const BUYBACK_EVENT_DATA_FIELDS: [&str; 5] =
@@ -128,6 +133,38 @@ pub fn register_event_topics(creator: &Address) -> (Symbol, Address) {
 /// which is distinct from a regular buy event. Indexers should process this
 /// event separately from `BUY_EVENT_NAME` events to correctly track supply
 /// changes and fee accounting.
+/// Stable buy event payload for downstream indexers.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct KeysBoughtEvent {
+    /// Address of the buyer performing the purchase.
+    pub buyer: Address,
+    /// Address of the creator whose keys are being purchased.
+    pub creator_id: Address,
+    /// Number of keys being bought.
+    pub quantity: u32,
+    /// Price paid for the keys (before fees).
+    pub price_paid: i128,
+    /// Ledger sequence number at the time of the purchase.
+    pub ledger: u32,
+}
+
+/// Stable sell event payload for downstream indexers.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct KeysSoldEvent {
+    /// Address of the seller performing the sale.
+    pub seller: Address,
+    /// Address of the creator whose keys are being sold.
+    pub creator_id: Address,
+    /// Number of keys sold in this transaction.
+    pub quantity: u32,
+    /// Net proceeds received by the seller after fees.
+    pub proceeds: i128,
+    /// Ledger sequence number at the time of the sale.
+    pub ledger: u32,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
 pub struct KeysBoughtBackEvent {
@@ -253,6 +290,33 @@ pub struct CreatorFeeRecipientUpdatedEvent {
     pub new_recipient: Address,
 }
 
+/// Event name for contract initialization (first fee config set).
+pub const CONTRACT_INITIALIZED_EVENT_NAME: Symbol = symbol_short!("init");
+
+/// Stable contract initialization event payload for downstream indexers.
+///
+/// Emitted exactly once on the first successful `set_fee_config` call.
+/// Re-initialization attempts revert before reaching event emission.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct ContractInitializedEvent {
+    pub admin: Address,
+    pub protocol_fee_bps: u32,
+    pub protocol_fee_recipient: Address,
+    pub initialized_at_ledger: u32,
+}
+
+/// Event name for global fee configuration update.
+pub const FEE_CONFIG_UPDATED_EVENT_NAME: Symbol = symbol_short!("fee_upd");
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct FeeConfigUpdatedEvent {
+    pub old_bps: u32,
+    pub new_bps: u32,
+    pub updated_at_ledger: u32,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
 pub struct CoCreatorFeeEarned {
@@ -270,6 +334,35 @@ pub fn co_creator_fee_earned_topics(
         CO_CREATOR_FEE_EARNED_EVENT_NAME,
         creator_id.clone(),
         co_creator.clone(),
+    )
+}
+
+/// Stable referral fee earned event payload for downstream indexers.
+///
+/// Event shape:
+/// - topics: `(REFERRAL_FEE_EARNED_EVENT_NAME, creator_id, referrer)`
+/// - data: `ReferralFeeEarnedEvent`
+///
+/// Emitted when a referrer earns a share of the protocol fee from a buy.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct ReferralFeeEarnedEvent {
+    pub creator_id: Address,
+    pub buyer: Address,
+    pub referrer: Address,
+    pub amount: i128,
+    pub ledger: u32,
+}
+
+/// Shared referral fee earned event topics tuple.
+pub fn referral_fee_earned_topics(
+    creator_id: &Address,
+    referrer: &Address,
+) -> (Symbol, Address, Address) {
+    (
+        REFERRAL_FEE_EARNED_EVENT_NAME,
+        creator_id.clone(),
+        referrer.clone(),
     )
 }
 
@@ -299,11 +392,12 @@ pub struct KeysTransferredEvent {
 pub const KEYS_AIRDROPPED_EVENT_NAME: Symbol = symbol_short!("airdrop");
 
 /// Stable field order for airdrop event payloads.
-pub const KEYS_AIRDROPPED_DATA_FIELDS: [&str; 5] = [
+pub const KEYS_AIRDROPPED_DATA_FIELDS: [&str; 6] = [
     "creator_id",
     "total_keys",
     "total_cost",
     "recipient_count",
+    "skipped_count",
     "ledger",
 ];
 
@@ -314,7 +408,8 @@ pub const KEYS_AIRDROPPED_DATA_FIELDS: [&str; 5] = [
 /// - data: `KeysAirdroppedEvent`
 ///
 /// `total_cost` is the full amount charged to the creator (curve cost plus
-/// protocol fee) and `ledger` is the Soroban ledger sequence number at airdrop
+/// protocol fee), `skipped_count` is the number of recipients skipped due to
+/// per-wallet cap, and `ledger` is the Soroban ledger sequence number at airdrop
 /// time so off-chain indexers can reconstruct the timeline.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
@@ -323,6 +418,7 @@ pub struct KeysAirdroppedEvent {
     pub total_keys: u32,
     pub total_cost: i128,
     pub recipient_count: u32,
+    pub skipped_count: u32,
     pub ledger: u32,
 }
 
@@ -333,6 +429,9 @@ pub fn keys_airdropped_topics(creator: &Address) -> (Symbol, Address) {
 
 /// Event name for treasury withdrawal by the protocol admin.
 pub const TREASURY_WITHDRAWAL_EVENT_NAME: Symbol = symbol_short!("treas_out");
+
+/// Event name for creator storage TTL extension.
+pub const TTL_EXTENDED_EVENT_NAME: Symbol = symbol_short!("ttl_ext");
 
 /// Stable field order for treasury withdrawal event payloads.
 pub const TREASURY_WITHDRAWAL_DATA_FIELDS: [&str; 4] =
@@ -358,6 +457,11 @@ pub struct TreasuryWithdrawalEvent {
 /// Shared treasury withdrawal event topics tuple.
 pub fn treasury_withdrawal_event_topics(recipient: &Address) -> (Symbol, Address) {
     (TREASURY_WITHDRAWAL_EVENT_NAME, recipient.clone())
+}
+
+/// Shared TTL extension event topics tuple.
+pub fn ttl_extended_topics(creator: &Address) -> (Symbol, Address) {
+    (TTL_EXTENDED_EVENT_NAME, creator.clone())
 }
 
 #[contracterror]
@@ -526,7 +630,7 @@ impl CreatorKeysContract {
             return Err(PollError::InvalidOption);
         }
 
-        let balance_key = constants::storage::key_balance(&creator_id, &voter);
+        let balance_key = constants::storage::holder_balance_key(&creator_id, &voter);
         let weight: u32 = env.storage().persistent().get(&balance_key).unwrap_or(0);
         if weight == 0 {
             return Err(PollError::NotAHolder);
