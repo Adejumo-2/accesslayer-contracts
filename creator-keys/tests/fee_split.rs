@@ -46,7 +46,7 @@ fn test_set_fee_config_invalid_sum_fails() {
     let client = CreatorKeysContractClient::new(&env, &contract_id);
     let admin = soroban_sdk::Address::generate(&env);
 
-    let result = client.try_set_fee_config(&admin, &8000u32, &1000u32);
+    let result = client.try_set_fee_config(&admin, &8000u32, &3000u32);
     assert_eq!(result, Err(Ok(ContractError::InvalidFeeConfig)));
 }
 
