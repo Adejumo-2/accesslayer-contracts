@@ -38,6 +38,7 @@ fn register_creator_with_co_creator(
         &None,
         &None,
         &None,
+        &None,
         &Some(config),
         &None,
     );
