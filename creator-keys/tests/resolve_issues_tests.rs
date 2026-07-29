@@ -146,3 +146,142 @@ fn test_buy_event_fields_on_success() {
     // ledger matches the transaction ledger number
     assert_eq!(event_data.ledger, test_ledger);
 }
+
+fn query_price(client: &CreatorKeysContractClient, creator: &Address) -> i128 {
+    client.get_buy_quote(creator).price
+}
+
+#[test]
+fn test_buy_event_price_paid_matches_pre_buy_query_price() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(CreatorKeysContract, ());
+    let client = CreatorKeysContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.set_key_price(&admin, &100_i128);
+    client.set_fee_config(&admin, &9000u32, &1000u32);
+
+    let creator = Address::generate(&env);
+    client.register_creator(
+        &creator_keys::RegisterCreatorParams {
+            creator: creator.clone(),
+            handle: String::from_str(&env, "linear_creator"),
+        },
+        &None,
+        &None,
+        &None,
+        &Some(creator_keys::CurvePreset::Linear),
+        &None,
+        &None,
+    );
+
+    let buyer = Address::generate(&env);
+
+    // Verify at supply steps 0, 4, and 9
+    // Supply Step 0
+    let price_at_0 = query_price(&client, &creator);
+    client.buy_key(&creator, &buyer, &price_at_0, &None);
+    let events_0 = env.events().all();
+    let buy_event_0 = events_0
+        .iter()
+        .rev()
+        .find(|(_, topics, _)| {
+            topics
+                .get(events::TOPIC_EVENT_NAME_INDEX)
+                .map(|v| {
+                    let name: Symbol = v.into_val(&env);
+                    name == events::BUY_EVENT_NAME
+                })
+                .unwrap_or(false)
+        })
+        .unwrap();
+    let data_0: events::KeysBoughtEvent = buy_event_0.2.into_val(&env);
+    assert_eq!(data_0.price_paid, price_at_0);
+
+    // Advance supply to 4 (currently at 1, buy 3 more keys)
+    for _ in 0..3 {
+        let p = query_price(&client, &creator);
+        client.buy_key(&creator, &buyer, &p, &None);
+    }
+    assert_eq!(client.query_supply(&creator), 4);
+
+    // Supply Step 4
+    let price_at_4 = query_price(&client, &creator);
+    client.buy_key(&creator, &buyer, &price_at_4, &None);
+    let events_4 = env.events().all();
+    let buy_event_4 = events_4
+        .iter()
+        .rev()
+        .find(|(_, topics, _)| {
+            topics
+                .get(events::TOPIC_EVENT_NAME_INDEX)
+                .map(|v| {
+                    let name: Symbol = v.into_val(&env);
+                    name == events::BUY_EVENT_NAME
+                })
+                .unwrap_or(false)
+        })
+        .unwrap();
+    let data_4: events::KeysBoughtEvent = buy_event_4.2.into_val(&env);
+    assert_eq!(data_4.price_paid, price_at_4);
+
+    // Advance supply to 9 (currently at 5, buy 4 more keys)
+    for _ in 0..4 {
+        let p = query_price(&client, &creator);
+        client.buy_key(&creator, &buyer, &p, &None);
+    }
+    assert_eq!(client.query_supply(&creator), 9);
+
+    // Supply Step 9
+    let price_at_9 = query_price(&client, &creator);
+    client.buy_key(&creator, &buyer, &price_at_9, &None);
+    let events_9 = env.events().all();
+    let buy_event_9 = events_9
+        .iter()
+        .rev()
+        .find(|(_, topics, _)| {
+            topics
+                .get(events::TOPIC_EVENT_NAME_INDEX)
+                .map(|v| {
+                    let name: Symbol = v.into_val(&env);
+                    name == events::BUY_EVENT_NAME
+                })
+                .unwrap_or(false)
+        })
+        .unwrap();
+    let data_9: events::KeysBoughtEvent = buy_event_9.2.into_val(&env);
+    assert_eq!(data_9.price_paid, price_at_9);
+}
+
+#[test]
+fn test_sell_updates_creator_supply_and_seller_balance_atomically() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, admin, creator) = setup(&env);
+    client.set_fee_config(&admin, &9000u32, &1000u32);
+    let seller = Address::generate(&env);
+
+    // Buy 3 keys so supply is 3 and seller balance is 3
+    for _ in 0..3 {
+        let price = query_price(&client, &creator);
+        client.buy_key(&creator, &seller, &price, &None);
+    }
+
+    assert_eq!(client.query_supply(&creator), 3);
+    assert_eq!(client.get_key_balance(&creator, &seller), 3);
+
+    // Execute a sell of 2 keys
+    client.sell_key(&creator, &seller, &None);
+    client.sell_key(&creator, &seller, &None);
+
+    // Read creator supply and seller holder balance immediately after transaction
+    // Assert supply is 1 and seller balance is 1 in the same post-transaction block
+    let post_sell_supply = client.query_supply(&creator);
+    let post_sell_balance = client.get_key_balance(&creator, &seller);
+
+    assert_eq!(post_sell_supply, 1);
+    assert_eq!(post_sell_balance, 1);
+}

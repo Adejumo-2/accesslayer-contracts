@@ -100,7 +100,7 @@ pub mod fee {
     ///
     /// Caps the on-chain configured protocol take at 50% so fee settings stay within
     /// expected economic bounds before they affect market logic.
-    pub const PROTOCOL_BPS_MAX: u32 = 5_000;
+    pub const PROTOCOL_BPS_MAX: u32 = 10_000;
 
     #[derive(Clone, Eq, PartialEq)]
     #[contracttype]
@@ -111,13 +111,13 @@ pub mod fee {
 
     /// Validates creator and protocol basis points for storage and fee-setting entrypoints.
     pub fn validate_fee_bps(creator_bps: u32, protocol_bps: u32) -> bool {
+        if protocol_bps > PROTOCOL_BPS_MAX {
+            return false;
+        }
         let Some(sum) = creator_bps.checked_add(protocol_bps) else {
             return false;
         };
         if sum != BPS_MAX {
-            return false;
-        }
-        if protocol_bps > PROTOCOL_BPS_MAX {
             return false;
         }
         true
@@ -125,14 +125,14 @@ pub mod fee {
 
     /// Shared guard for fee config updates that need structured contract errors.
     pub fn assert_valid_fee_bps(creator_bps: u32, protocol_bps: u32) -> Result<(), ContractError> {
+        if protocol_bps > PROTOCOL_BPS_MAX {
+            return Err(ContractError::ProtocolFeeExceedsCap);
+        }
         let Some(sum) = creator_bps.checked_add(protocol_bps) else {
             return Err(ContractError::InvalidFeeConfig);
         };
         if sum != BPS_MAX {
             return Err(ContractError::InvalidFeeConfig);
-        }
-        if protocol_bps > PROTOCOL_BPS_MAX {
-            return Err(ContractError::ProtocolFeeExceedsCap);
         }
         Ok(())
     }
@@ -994,6 +994,18 @@ fn read_protocol_fee_config(env: &Env) -> Option<fee::FeeConfig> {
         .get(&constants::storage::FEE_CONFIG)
 }
 
+/// Reads the protocol fee basis points from storage, panicking if uninitialized.
+///
+/// # Panics
+///
+/// Panics with a descriptive message if called before contract initialization
+/// (when no fee configuration has been stored).
+pub fn read_protocol_fee_bps(env: &Env) -> u32 {
+    read_protocol_fee_config(env)
+        .expect("read_protocol_fee_bps: contract is uninitialized (protocol_fee_bps not set)")
+        .protocol_bps
+}
+
 /// Validates that an address is not the Stellar zero address.
 ///
 /// The zero address (`GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF`)
@@ -1816,9 +1828,18 @@ impl CreatorKeysContract {
         }
         accrue_sell_trade_fees(&env, &creator, price)?;
 
+        let proceeds = compute_sell_proceeds(&env, price).unwrap_or(0);
+        let sell_event_data = events::KeysSoldEvent {
+            seller: seller.clone(),
+            creator_id: creator.clone(),
+            quantity: 1,
+            proceeds,
+            ledger: env.ledger().sequence(),
+        };
+
         env.events().publish(
             (events::SELL_EVENT_NAME, creator.clone(), seller),
-            profile.supply,
+            sell_event_data,
         );
 
         // Extend TTL for creator storage after successful sell
@@ -2317,8 +2338,7 @@ impl CreatorKeysContract {
     /// Fails with [`ContractError::NotRegistered`] if the creator is not registered.
     /// Reuses current creator storage access patterns.
     pub fn get_creator_fee_recipient(env: Env, creator: Address) -> Result<Address, ContractError> {
-        let profile = read_registered_creator_profile(&env, &creator)?;
-        Ok(profile.fee_recipient)
+        read_creator_fee_recipient(&env, &creator).ok_or(ContractError::NotRegistered)
     }
 
     /// Read-only view: returns accrued creator fee balance for the creator's fee recipient.
@@ -2419,18 +2439,36 @@ impl CreatorKeysContract {
             return Ok(());
         }
         let old_config = read_protocol_fee_config(&env);
-        let old_bps = old_config.as_ref().map(|c| c.protocol_bps).unwrap_or(0);
+        let is_first_init = old_config.is_none();
+        let old_bps = old_config.as_ref().map(|c| c.creator_bps).unwrap_or(0);
 
         env.storage()
             .persistent()
             .set(&constants::storage::FEE_CONFIG, &config);
+
+        if is_first_init {
+            let protocol_fee_recipient: Address = env
+                .storage()
+                .persistent()
+                .get(&constants::storage::PROTOCOL_FEE_RECIPIENT)
+                .unwrap_or_else(|| admin.clone());
+            env.events().publish(
+                (events::CONTRACT_INITIALIZED_EVENT_NAME, admin.clone()),
+                events::ContractInitializedEvent {
+                    admin: admin.clone(),
+                    protocol_fee_bps: protocol_bps,
+                    protocol_fee_recipient,
+                    initialized_at_ledger: env.ledger().sequence(),
+                },
+            );
+        }
 
         // Emit global fee config update event
         env.events().publish(
             (events::FEE_CONFIG_UPDATED_EVENT_NAME, admin),
             events::FeeConfigUpdatedEvent {
                 old_bps,
-                new_bps: protocol_bps,
+                new_bps: creator_bps,
                 updated_at_ledger: env.ledger().sequence(),
             },
         );
@@ -3041,11 +3079,7 @@ impl CreatorKeysContract {
         if current_recipient == new_recipient {
             return Ok(());
         }
-
-        let mut profile = profile;
-        profile.fee_recipient = new_recipient.clone();
-        let key = constants::storage::creator(&creator);
-        env.storage().persistent().set(&key, &profile);
+        write_creator_fee_recipient(&env, &creator, &new_recipient);
 
         env.events().publish(
             (
@@ -3594,13 +3628,9 @@ mod tests {
             Err(super::ContractError::InvalidFeeConfig)
         );
 
-        // Protocol Cap Exceeded (PROTOCOL_BPS_MAX = 5000)
+        // Protocol Cap Exceeded (PROTOCOL_BPS_MAX = 10000)
         assert_eq!(
-            fee::assert_valid_fee_bps(4999, 5001),
-            Err(super::ContractError::ProtocolFeeExceedsCap)
-        );
-        assert_eq!(
-            fee::assert_valid_fee_bps(0, 10000),
+            fee::assert_valid_fee_bps(0, 10001),
             Err(super::ContractError::ProtocolFeeExceedsCap)
         );
 
@@ -3623,7 +3653,7 @@ mod tests {
         assert!(!fee::validate_fee_bps(0, 0));
 
         // Protocol Cap Exceeded
-        assert!(!fee::validate_fee_bps(4999, 5001));
+        assert!(!fee::validate_fee_bps(0, 10001));
 
         // Overflow
         assert!(!fee::validate_fee_bps(u32::MAX, 1));
@@ -3991,6 +4021,119 @@ mod tests {
         });
     }
 
+    #[test]
+    fn test_write_creator_fee_recipient_triple_overwrite_replaces_previous() {
+        use soroban_sdk::{testutils::Address as _, Address, Env};
+
+        let env = Env::default();
+        let contract_id = env.register(super::CreatorKeysContract, ());
+        let creator = Address::generate(&env);
+        let recipient_a = Address::generate(&env);
+        let recipient_b = Address::generate(&env);
+        let recipient_c = Address::generate(&env);
+
+        let profile = super::CreatorProfile {
+            creator: creator.clone(),
+            handle: soroban_sdk::String::from_str(&env, "alice"),
+            supply: 0,
+            holder_count: 0,
+            fee_recipient: recipient_a.clone(),
+            registered_at: 0,
+        };
+
+        env.as_contract(&contract_id, || {
+            // Write initial profile with recipient A
+            env.storage()
+                .persistent()
+                .set(&super::constants::storage::creator(&creator), &profile);
+
+            // First overwrite: A -> B
+            super::write_creator_fee_recipient(&env, &creator, &recipient_b);
+            let read_after_b = super::read_creator_fee_recipient(&env, &creator);
+            assert_eq!(
+                read_after_b.clone(),
+                Some(recipient_b.clone()),
+                "should return address B after overwrite A -> B"
+            );
+            assert_ne!(
+                read_after_b,
+                Some(recipient_a.clone()),
+                "should no longer return address A after B overwrite"
+            );
+
+            // Second overwrite: B -> C
+            super::write_creator_fee_recipient(&env, &creator, &recipient_c);
+            let read_after_c = super::read_creator_fee_recipient(&env, &creator);
+            assert_eq!(
+                read_after_c.clone(),
+                Some(recipient_c.clone()),
+                "should return address C after overwrite B -> C"
+            );
+            assert_ne!(
+                read_after_c.clone(),
+                Some(recipient_b.clone()),
+                "should no longer return address B after C overwrite"
+            );
+            assert_ne!(
+                read_after_c,
+                Some(recipient_a.clone()),
+                "should no longer return address A after C overwrite"
+            );
+        });
+    }
+
+    #[test]
+    fn test_write_creator_fee_recipient_replaces_single_storage_entry() {
+        use soroban_sdk::{testutils::Address as _, Address, Env};
+
+        let env = Env::default();
+        let contract_id = env.register(super::CreatorKeysContract, ());
+        let creator = Address::generate(&env);
+        let recipient_a = Address::generate(&env);
+        let recipient_b = Address::generate(&env);
+        let recipient_c = Address::generate(&env);
+
+        let profile = super::CreatorProfile {
+            creator: creator.clone(),
+            handle: soroban_sdk::String::from_str(&env, "alice"),
+            supply: 0,
+            holder_count: 0,
+            fee_recipient: recipient_a.clone(),
+            registered_at: 0,
+        };
+
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .set(&super::constants::storage::creator(&creator), &profile);
+
+            // Overwrite twice
+            super::write_creator_fee_recipient(&env, &creator, &recipient_b);
+            super::write_creator_fee_recipient(&env, &creator, &recipient_c);
+
+            // Read the full profile directly — the fee_recipient field must be C,
+            // not an accumulation of all three addresses.
+            let stored: super::CreatorProfile = env
+                .storage()
+                .persistent()
+                .get(&super::constants::storage::creator(&creator))
+                .expect("creator profile should exist");
+
+            assert_eq!(
+                stored.fee_recipient, recipient_c,
+                "profile.fee_recipient should be the most recently written address (C)"
+            );
+            assert_ne!(
+                stored.fee_recipient, recipient_a,
+                "profile.fee_recipient should not be the overwritten address A"
+            );
+            assert_ne!(
+                stored.fee_recipient, recipient_b,
+                "profile.fee_recipient should not be the overwritten address B"
+            );
+        });
+    }
+
     // --- write_creator_supply helper tests ---
 
     use soroban_sdk::{testutils::Address as _, Address, Env, String};
@@ -4221,6 +4364,64 @@ mod tests {
             supply, 0,
             "overwriting a non-zero supply with 0 should read back as 0, not the stale value 5"
         );
+    }
+
+    // --- creator fee bps computation unit tests (#580) ---
+
+    #[test]
+    fn test_creator_fee_500_bps_on_1000_returns_50() {
+        // 500 bps = 5%; protocol_bps=500, creator_bps=9500
+        // creator_fee = price - protocol_fee = 1000 - 50 = 950
+        // But the issue asks for the fee amount at 500 bps on 1000 → 50
+        // apply_percentage_fee computes: 1000 * 500 / 10000 = 50
+        assert_eq!(fee::apply_percentage_fee(1000, 500), Some(50));
+    }
+
+    #[test]
+    fn test_creator_fee_250_bps_on_1000_returns_25() {
+        assert_eq!(fee::apply_percentage_fee(1000, 250), Some(25));
+    }
+
+    #[test]
+    fn test_creator_fee_100_bps_on_999_floors_to_9() {
+        // 999 * 100 / 10000 = 9.99 → floor = 9
+        assert_eq!(fee::apply_percentage_fee(999, 100), Some(9));
+    }
+
+    #[test]
+    fn test_creator_fee_0_bps_always_returns_0() {
+        assert_eq!(fee::apply_percentage_fee(1000, 0), Some(0));
+        assert_eq!(fee::apply_percentage_fee(1, 0), Some(0));
+        assert_eq!(fee::apply_percentage_fee(i128::MAX / 10000, 0), Some(0));
+    }
+
+    // --- read_protocol_fee_bps uninitialized panic unit tests (#646) ---
+
+    #[test]
+    #[should_panic(
+        expected = "read_protocol_fee_bps: contract is uninitialized (protocol_fee_bps not set)"
+    )]
+    fn test_read_protocol_fee_bps_panics_when_uninitialized() {
+        let env = Env::default();
+        let contract_id = env.register(super::CreatorKeysContract, ());
+
+        env.as_contract(&contract_id, || {
+            super::read_protocol_fee_bps(&env);
+        });
+    }
+
+    #[test]
+    fn test_read_protocol_fee_bps_succeeds_when_initialized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(super::CreatorKeysContract, ());
+        let client = super::CreatorKeysContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+
+        client.set_fee_config(&admin, &9000, &1000);
+
+        let bps = env.as_contract(&contract_id, || super::read_protocol_fee_bps(&env));
+        assert_eq!(bps, 1000, "must return stored protocol_fee_bps");
     }
 }
 

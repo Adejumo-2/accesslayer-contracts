@@ -82,7 +82,8 @@ pub const BUY_EVENT_DATA_FIELDS: [&str; 5] =
     ["buyer", "creator_id", "quantity", "price_paid", "ledger"];
 
 /// Stable field order for sell event payloads.
-pub const SELL_EVENT_DATA_FIELDS: [&str; 1] = ["supply"];
+pub const SELL_EVENT_DATA_FIELDS: [&str; 5] =
+    ["seller", "creator_id", "quantity", "proceeds", "ledger"];
 
 /// Stable field order for buyback event payloads.
 pub const BUYBACK_EVENT_DATA_FIELDS: [&str; 5] =
@@ -145,6 +146,22 @@ pub struct KeysBoughtEvent {
     /// Price paid for the keys (before fees).
     pub price_paid: i128,
     /// Ledger sequence number at the time of the purchase.
+    pub ledger: u32,
+}
+
+/// Stable sell event payload for downstream indexers.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct KeysSoldEvent {
+    /// Address of the seller performing the sale.
+    pub seller: Address,
+    /// Address of the creator whose keys are being sold.
+    pub creator_id: Address,
+    /// Number of keys sold in this transaction.
+    pub quantity: u32,
+    /// Net proceeds received by the seller after fees.
+    pub proceeds: i128,
+    /// Ledger sequence number at the time of the sale.
     pub ledger: u32,
 }
 
@@ -271,6 +288,22 @@ pub struct CreatorFeeRecipientUpdatedEvent {
     pub creator_id: Address,
     pub old_recipient: Address,
     pub new_recipient: Address,
+}
+
+/// Event name for contract initialization (first fee config set).
+pub const CONTRACT_INITIALIZED_EVENT_NAME: Symbol = symbol_short!("init");
+
+/// Stable contract initialization event payload for downstream indexers.
+///
+/// Emitted exactly once on the first successful `set_fee_config` call.
+/// Re-initialization attempts revert before reaching event emission.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct ContractInitializedEvent {
+    pub admin: Address,
+    pub protocol_fee_bps: u32,
+    pub protocol_fee_recipient: Address,
+    pub initialized_at_ledger: u32,
 }
 
 /// Event name for global fee configuration update.
