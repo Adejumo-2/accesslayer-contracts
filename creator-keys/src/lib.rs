@@ -506,6 +506,15 @@ pub const KEY_DECIMALS: u32 = 7;
 /// buy or sell operation to prevent active creator state from expiring.
 pub const CREATOR_TTL_LEDGERS: u32 = 6311520; // ~2 years at 5s per ledger
 
+/// Minimum remaining TTL (in ledgers) that triggers a TTL extension event.
+///
+/// When the creator key's remaining TTL drops strictly below this threshold,
+/// the next trade will emit a [`events::TTL_EXTENDED_EVENT_NAME`] event.
+/// When the remaining TTL is at or above this value, the extension is still
+/// performed (via Soroban's `extend_ttl` SDK call, which is a no-op when the
+/// entry already has a healthy expiration), but no event is emitted.
+pub const TTL_EXTENSION_THRESHOLD: u32 = 100;
+
 /// TTL (time-to-live) extension decision logic.
 ///
 /// Storage TTL extension should only fire when the remaining TTL drops below
@@ -1334,6 +1343,13 @@ fn extend_creator_ttl(env: &Env, creator: &Address) {
     let threshold = current_ledger;
 
     let creator_key = constants::storage::creator(creator);
+
+    // Check remaining TTL before extending to decide whether to emit the event.
+    // The extend_ttl SDK call still happens unconditionally (it is a no-op when
+    // the entry already has a healthy expiration).
+    let ttl_before = env.storage().persistent().get_ttl(&creator_key);
+    let needs_event = ttl::should_extend(ttl_before, TTL_EXTENSION_THRESHOLD);
+
     env.storage()
         .persistent()
         .extend_ttl(&creator_key, threshold, extend_to);
@@ -1392,8 +1408,12 @@ fn extend_creator_ttl(env: &Env, creator: &Address) {
         }
     }
 
-    env.events()
-        .publish(events::ttl_extended_topics(creator), extend_to);
+    // Only emit the TTL extension event when the remaining TTL was below the
+    // extension threshold before this call. A healthy TTL silently skips the event.
+    if needs_event {
+        env.events()
+            .publish(events::ttl_extended_topics(creator), extend_to);
+    }
 }
 
 #[contract]

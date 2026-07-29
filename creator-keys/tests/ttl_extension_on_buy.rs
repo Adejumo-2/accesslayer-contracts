@@ -149,3 +149,59 @@ fn test_ttl_not_extended_when_already_high() {
         "TTL should remain unchanged after second buy on same ledger"
     );
 }
+
+/// No TTL extension event is emitted when the creator's TTL is well above
+/// the extension threshold (healthy state). Confirms the buy itself still
+/// succeeds and emits its own event.
+#[test]
+fn test_no_ttl_extension_event_when_ttl_healthy() {
+    let env = soroban_sdk::Env::default();
+    env.mock_all_auths();
+    let (client, contract_id, creator) = setup(&env);
+    let holder = Address::generate(&env);
+
+    // Record the TTL immediately after registration — it should be far above
+    // the extension threshold (CREATOR_TTL_LEDGERS / 100 = 63k+ ledgers).
+    let ttl_before = creator_ttl_remaining(&env, &contract_id, &creator);
+
+    // Sanity check: the TTL must be at least 2x the extension threshold.
+    assert!(
+        ttl_before >= 2 * creator_keys::TTL_EXTENSION_THRESHOLD,
+        "TTL should be at least 2x the extension threshold: ttl={ttl_before} threshold={}",
+        creator_keys::TTL_EXTENSION_THRESHOLD
+    );
+
+    // Execute buy without advancing the ledger — TTL is still healthy.
+    let result = client.try_buy_key(&creator, &holder, &KEY_PRICE, &None);
+    assert_eq!(result, Ok(Ok(1)), "buy should succeed when TTL is healthy");
+
+    // Extract all events emitted during the buy transaction.
+    let events = env.events().all();
+
+    // Assert no TTL extension event was emitted.
+    let ttl_extension_found = events
+        .iter()
+        .rev()
+        .any(|(_, topics, _)| topics == ttl_extended_topics(&creator).into_val(&env));
+    assert!(
+        !ttl_extension_found,
+        "No TTL extension event should be emitted when TTL is healthy"
+    );
+
+    // Assert a buy event IS present (confirming the transaction succeeded).
+    let buy_event_found = events.iter().rev().any(|(_, topics, _)| {
+        let topic0: soroban_sdk::Symbol = topics.get(0).unwrap().into_val(&env);
+        topic0 == events::BUY_EVENT_NAME
+    });
+    assert!(
+        buy_event_found,
+        "Buy event should be present confirming the transaction succeeded"
+    );
+
+    // Assert creator storage TTL is unchanged after the buy.
+    let ttl_after = creator_ttl_remaining(&env, &contract_id, &creator);
+    assert_eq!(
+        ttl_before, ttl_after,
+        "TTL should remain unchanged after buy when TTL is healthy: before={ttl_before} after={ttl_after}"
+    );
+}
