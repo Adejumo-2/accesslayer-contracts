@@ -281,4 +281,3 @@ fn failed_buy_slippage_exceeded_does_not_extend_ttl() {
         "TTL should NOT be extended on failed buy due to slippage"
     );
 }
-
