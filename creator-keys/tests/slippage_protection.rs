@@ -34,10 +34,7 @@ fn setup_sell(
     Address,
     Address,
 ) {
-    let (client, contract_id, creator, holder) = {
-        let (client, contract_id, creator, buyer) = setup_buy(env);
-        (client, contract_id, creator, buyer)
-    };
+    let (client, contract_id, creator, holder) = setup_buy(env);
     let buy_quote = client.get_buy_quote(&creator);
     client.buy_key(&creator, &holder, &buy_quote.total_amount, &None);
     (client, contract_id, creator, holder)
@@ -182,7 +179,7 @@ fn test_buy_slippage_max_price_zero_panics_unless_key_is_free() {
 #[test]
 fn test_buy_slippage_boundary_exact_cost_and_exceeded_by_one_stroop() {
     let env = test_env_with_auths();
-    let (client, _, creator, buyer) = setup_buy(&env);
+    let (client, _, creator, _buyer) = setup_buy(&env);
     let buy_quote = client.get_buy_quote(&creator);
     let actual_price = buy_quote.price;
 
