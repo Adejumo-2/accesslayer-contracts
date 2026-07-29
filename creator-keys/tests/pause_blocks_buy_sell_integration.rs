@@ -9,7 +9,9 @@
 
 mod contract_test_env;
 
-use contract_test_env::{register_creator_keys, register_test_creator, set_pricing_and_fees, test_env_with_auths};
+use contract_test_env::{
+    register_creator_keys, register_test_creator, set_pricing_and_fees, test_env_with_auths,
+};
 use creator_keys::ContractError;
 use soroban_sdk::{testutils::Address as _, Address};
 
@@ -44,7 +46,12 @@ fn test_buy_and_sell_revert_while_paused_then_buy_succeeds_after_unpause() {
 
     // --- buy reverts with the paused error code while paused ---
     let buy_quote_while_paused = client.get_buy_quote(&creator);
-    let buy_result = client.try_buy_key(&creator, &buyer, &buy_quote_while_paused.total_amount, &None);
+    let buy_result = client.try_buy_key(
+        &creator,
+        &buyer,
+        &buy_quote_while_paused.total_amount,
+        &None,
+    );
     assert_eq!(
         buy_result,
         Err(Ok(ContractError::ProtocolPaused)),
