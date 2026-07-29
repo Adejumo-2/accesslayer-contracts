@@ -1828,9 +1828,13 @@ impl CreatorKeysContract {
         }
         accrue_sell_trade_fees(&env, &creator, price)?;
 
+        let proceeds = compute_sell_proceeds(&env, price).unwrap_or(0);
         let sell_event_data = events::KeysSoldEvent {
+            seller: seller.clone(),
             creator_id: creator.clone(),
-            supply: profile.supply,
+            quantity: 1,
+            proceeds,
+            ledger: env.ledger().sequence(),
         };
 
         env.events().publish(
@@ -2435,11 +2439,29 @@ impl CreatorKeysContract {
             return Ok(());
         }
         let old_config = read_protocol_fee_config(&env);
+        let is_first_init = old_config.is_none();
         let old_bps = old_config.as_ref().map(|c| c.creator_bps).unwrap_or(0);
 
         env.storage()
             .persistent()
             .set(&constants::storage::FEE_CONFIG, &config);
+
+        if is_first_init {
+            let protocol_fee_recipient: Address = env
+                .storage()
+                .persistent()
+                .get(&constants::storage::PROTOCOL_FEE_RECIPIENT)
+                .unwrap_or_else(|| admin.clone());
+            env.events().publish(
+                (events::CONTRACT_INITIALIZED_EVENT_NAME, admin.clone()),
+                events::ContractInitializedEvent {
+                    admin: admin.clone(),
+                    protocol_fee_bps: protocol_bps,
+                    protocol_fee_recipient,
+                    initialized_at_ledger: env.ledger().sequence(),
+                },
+            );
+        }
 
         // Emit global fee config update event
         env.events().publish(
@@ -4342,6 +4364,35 @@ mod tests {
             supply, 0,
             "overwriting a non-zero supply with 0 should read back as 0, not the stale value 5"
         );
+    }
+
+    // --- creator fee bps computation unit tests (#580) ---
+
+    #[test]
+    fn test_creator_fee_500_bps_on_1000_returns_50() {
+        // 500 bps = 5%; protocol_bps=500, creator_bps=9500
+        // creator_fee = price - protocol_fee = 1000 - 50 = 950
+        // But the issue asks for the fee amount at 500 bps on 1000 → 50
+        // apply_percentage_fee computes: 1000 * 500 / 10000 = 50
+        assert_eq!(fee::apply_percentage_fee(1000, 500), Some(50));
+    }
+
+    #[test]
+    fn test_creator_fee_250_bps_on_1000_returns_25() {
+        assert_eq!(fee::apply_percentage_fee(1000, 250), Some(25));
+    }
+
+    #[test]
+    fn test_creator_fee_100_bps_on_999_floors_to_9() {
+        // 999 * 100 / 10000 = 9.99 → floor = 9
+        assert_eq!(fee::apply_percentage_fee(999, 100), Some(9));
+    }
+
+    #[test]
+    fn test_creator_fee_0_bps_always_returns_0() {
+        assert_eq!(fee::apply_percentage_fee(1000, 0), Some(0));
+        assert_eq!(fee::apply_percentage_fee(1, 0), Some(0));
+        assert_eq!(fee::apply_percentage_fee(i128::MAX / 10000, 0), Some(0));
     }
 
     // --- read_protocol_fee_bps uninitialized panic unit tests (#646) ---
