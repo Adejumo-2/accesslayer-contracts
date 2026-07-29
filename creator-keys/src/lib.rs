@@ -2575,20 +2575,32 @@ impl CreatorKeysContract {
     ///
     /// Only callable by an authorized admin. Stores the admin address used
     /// for protocol administration.
-    pub fn set_protocol_admin(env: Env, admin: Address, new_admin: Address) {
+    pub fn set_protocol_admin(
+        env: Env,
+        admin: Address,
+        new_admin: Address,
+    ) -> Result<(), ContractError> {
         admin.require_auth();
-        if env
+        validate_non_zero_address(&env, &new_admin)?;
+
+        let current_admin: Option<Address> = env
             .storage()
             .persistent()
-            .get::<DataKey, Address>(&constants::storage::ADMIN_ADDRESS)
-            .as_ref()
-            == Some(&new_admin)
-        {
-            return;
+            .get(&constants::storage::ADMIN_ADDRESS);
+
+        if let Some(ref current) = current_admin {
+            if admin != *current {
+                return Err(ContractError::Unauthorized);
+            }
+            if *current == new_admin {
+                return Ok(());
+            }
         }
+
         env.storage()
             .persistent()
             .set(&constants::storage::ADMIN_ADDRESS, &new_admin);
+        Ok(())
     }
 
     /// Read-only view: returns the current protocol admin address.
