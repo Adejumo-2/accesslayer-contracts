@@ -147,7 +147,8 @@ fn test_buy_slippage_max_price_u128_max_always_succeeds() {
     let buy_quote = client.get_buy_quote(&creator);
 
     // Setting max_price to max value (i128::MAX) never triggers the slippage guard
-    let supply = client.buy_key(&creator, &buyer, &buy_quote.total_amount, &Some(i128::MAX));
+    let max_price = Some(i128::MAX);
+    let supply = client.buy_key(&creator, &buyer, &buy_quote.total_amount, &max_price);
     assert_eq!(supply, 1);
     assert_eq!(client.get_key_balance(&creator, &buyer), 1);
 }
@@ -187,10 +188,16 @@ fn test_buy_slippage_boundary_exact_cost_and_exceeded_by_one_stroop() {
 
     // 1. Actual cost equal to max_price succeeds
     let buyer1 = Address::generate(&env);
-    let supply = client.buy_key(&creator, &buyer1, &buy_quote.total_amount, &Some(actual_price));
+    let supply = client.buy_key(
+        &creator,
+        &buyer1,
+        &buy_quote.total_amount,
+        &Some(actual_price),
+    );
     assert_eq!(supply, 1);
 
-    // 2. Actual cost exceeding max_price by 1 stroop (max_price = actual_price - 1) panics with SlippageExceeded
+    // 2. Actual cost exceeding max_price by 1 stroop (max_price = actual_price - 1)
+    // panics with SlippageExceeded
     let buyer2 = Address::generate(&env);
     let before = capture_snapshot(&client, &creator, &buyer2);
     let result = client.try_buy_key(
@@ -205,4 +212,5 @@ fn test_buy_slippage_boundary_exact_cost_and_exceeded_by_one_stroop() {
     // 3. Assert no state is mutated when the guard panics
     before.assert_unchanged(&after);
 }
+
 
