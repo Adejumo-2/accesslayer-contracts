@@ -212,5 +212,3 @@ fn test_buy_slippage_boundary_exact_cost_and_exceeded_by_one_stroop() {
     // 3. Assert no state is mutated when the guard panics
     before.assert_unchanged(&after);
 }
-
-
