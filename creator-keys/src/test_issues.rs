@@ -769,8 +769,7 @@ mod issue_tests {
         for supply in [0u64, 1u64, 50u64] {
             let queried_price = client.query_price(&quad_creator, &supply);
             let expected_price = env.as_contract(&contract_id, || {
-                compute_bonding_curve_price(&env, &quad_creator, base_price, supply as u32)
-                    .unwrap()
+                compute_bonding_curve_price(&env, &quad_creator, base_price, supply as u32).unwrap()
             });
             assert_eq!(queried_price, expected_price);
         }
