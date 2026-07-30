@@ -360,20 +360,20 @@ pub mod constants {
             DataKey::MaxSupply(creator.clone())
         }
 
+        pub fn staked_balance(creator: &Address, holder: &Address) -> DataKey {
+            DataKey::StakedBalance(creator.clone(), holder.clone())
+        }
+
+        pub fn key_balance(creator: &Address, holder: &Address) -> DataKey {
+            key_balance_key(creator, holder)
+        }
+
         pub fn max_keys_per_wallet(creator: &Address) -> DataKey {
             DataKey::MaxKeysPerWallet(creator.clone())
         }
 
         pub fn referral_fee_bps() -> DataKey {
             DataKey::ReferralFeeBps
-        }
-
-        pub fn discount_tiers() -> DataKey {
-            DataKey::DiscountTiers
-        }
-
-        pub fn creator_volume(creator: &Address) -> DataKey {
-            DataKey::CreatorVolume(creator.clone())
         }
     }
 
@@ -585,10 +585,9 @@ pub enum DataKey {
     CoCreator(Address),
     CoCreatorFeeBalance(Address, Address),
     Whitelist(Address),
+    StakedBalance(Address, Address), // (creator, holder) -> staked amount
     MaxKeysPerWallet(Address),
     ReferralFeeBps,
-    DiscountTiers,
-    CreatorVolume(Address),
 }
 
 /// Time-locked key allocation for creator self-vesting.
@@ -1789,6 +1788,19 @@ impl CreatorKeysContract {
         // Missing balance entries are interpreted as zero and rejected consistently.
         let current_balance: u32 = env.storage().persistent().get(&balance_key).unwrap_or(0);
         if current_balance == 0 {
+            return Err(ContractError::InsufficientBalance);
+        }
+
+        // Check liquid balance (total balance - staked balance)
+        let staked_balance_key = constants::storage::staked_balance(&creator, &seller);
+        let staked_balance: u32 = env
+            .storage()
+            .persistent()
+            .get(&staked_balance_key)
+            .unwrap_or(0);
+        let liquid_balance = current_balance.saturating_sub(staked_balance);
+
+        if liquid_balance == 0 {
             return Err(ContractError::InsufficientBalance);
         }
 
@@ -3327,79 +3339,137 @@ impl CreatorKeysContract {
         Ok(remaining)
     }
 
-    pub fn query_supply(env: Env, creator: Address) -> Result<u32, ContractError> {
-        Self::get_creator_supply(env, creator)
-    }
-
-    /// Read-only view: returns the configured referral fee basis points.
+    /// Stakes a specified amount of keys for a holder.
     ///
-    /// Returns the default value when no custom value has been set.
-    pub fn get_referral_fee_bps(env: Env) -> u32 {
-        env.storage()
-            .persistent()
-            .get::<DataKey, u32>(&constants::storage::referral_fee_bps())
-            .unwrap_or(DEFAULT_REFERRAL_FEE_BPS)
-    }
-
-    /// Updates the referral fee basis points.
+    /// Staked keys are locked and cannot be sold until unstaked. The holder must authorize
+    /// the call. The staked amount is tracked separately from the total balance.
     ///
-    /// Only callable by the protocol admin.
-    pub fn set_referral_fee_bps(env: Env, admin: Address, bps: u32) -> Result<(), ContractError> {
-        admin.require_auth();
-        assert_is_admin(&env, &admin)?;
-        if bps > fee::BPS_MAX {
-            return Err(ContractError::InvalidFeeConfig);
+    /// # Errors
+    ///
+    /// - [`ContractError::NotPositiveAmount`] if `amount` is zero
+    /// - [`ContractError::InsufficientBalance`] if the holder's liquid balance is less than `amount`
+    /// - [`ContractError::ProtocolPaused`] if the contract is paused
+    pub fn stake_keys(
+        env: Env,
+        creator: Address,
+        holder: Address,
+        amount: u32,
+    ) -> Result<(), ContractError> {
+        holder.require_auth();
+        assert_not_paused(&env)?;
+
+        if amount == 0 {
+            return Err(ContractError::NotPositiveAmount);
         }
+
+        // Verify creator is registered
+        let _profile: CreatorProfile = read_registered_creator_profile(&env, &creator)?;
+
+        let balance_key = constants::storage::key_balance(&creator, &holder);
+        let current_balance: u32 = env.storage().persistent().get(&balance_key).unwrap_or(0);
+
+        let staked_balance_key = constants::storage::staked_balance(&creator, &holder);
+        let current_staked: u32 = env
+            .storage()
+            .persistent()
+            .get(&staked_balance_key)
+            .unwrap_or(0);
+
+        // Check if holder has enough liquid balance to stake
+        let liquid_balance = current_balance.saturating_sub(current_staked);
+        if liquid_balance < amount {
+            return Err(ContractError::InsufficientBalance);
+        }
+
+        // Update staked balance
+        let new_staked = current_staked
+            .checked_add(amount)
+            .ok_or(ContractError::Overflow)?;
         env.storage()
             .persistent()
-            .set(&constants::storage::referral_fee_bps(), &bps);
+            .set(&staked_balance_key, &new_staked);
+
         Ok(())
     }
 
-    /// Read-only view: returns the per-wallet cap for a creator.
+    /// Unstakes a specified amount of keys for a holder.
     ///
-    /// Returns `None` if no cap is set.
-    pub fn get_wallet_cap(env: Env, creator: Address) -> Option<u32> {
-        env.storage()
+    /// Unstaked keys become liquid and can be sold. The holder must authorize the call.
+    ///
+    /// # Errors
+    ///
+    /// - [`ContractError::NotPositiveAmount`] if `amount` is zero
+    /// - [`ContractError::InsufficientBalance`] if the holder's staked balance is less than `amount`
+    /// - [`ContractError::ProtocolPaused`] if the contract is paused
+    pub fn unstake_keys(
+        env: Env,
+        creator: Address,
+        holder: Address,
+        amount: u32,
+    ) -> Result<(), ContractError> {
+        holder.require_auth();
+        assert_not_paused(&env)?;
+
+        if amount == 0 {
+            return Err(ContractError::NotPositiveAmount);
+        }
+
+        // Verify creator is registered
+        let _profile: CreatorProfile = read_registered_creator_profile(&env, &creator)?;
+
+        let staked_balance_key = constants::storage::staked_balance(&creator, &holder);
+        let current_staked: u32 = env
+            .storage()
             .persistent()
-            .get::<DataKey, u32>(&constants::storage::max_keys_per_wallet(&creator))
+            .get(&staked_balance_key)
+            .unwrap_or(0);
+
+        if current_staked < amount {
+            return Err(ContractError::InsufficientBalance);
+        }
+
+        // Update staked balance
+        let new_staked = current_staked
+            .checked_sub(amount)
+            .ok_or(ContractError::Overflow)?;
+
+        if new_staked == 0 {
+            env.storage().persistent().remove(&staked_balance_key);
+        } else {
+            env.storage()
+                .persistent()
+                .set(&staked_balance_key, &new_staked);
+        }
+
+        Ok(())
     }
 
-    /// Read-only view: returns cumulative creator volume.
+    /// Returns the staked balance for a holder.
     ///
-    /// Returns `0` when no volume has been recorded.
-    pub fn get_creator_volume(env: Env, creator: Address) -> i128 {
+    /// Staked keys are locked and cannot be sold until unstaked.
+    pub fn get_staked_balance(env: Env, creator: Address, holder: Address) -> u32 {
+        let staked_balance_key = constants::storage::staked_balance(&creator, &holder);
         env.storage()
             .persistent()
-            .get::<DataKey, i128>(&constants::storage::creator_volume(&creator))
+            .get(&staked_balance_key)
             .unwrap_or(0)
     }
 
-    /// Updates discount tiers (admin-only).
+    /// Returns the liquid balance for a holder.
     ///
-    /// Replaces the full tier list. Maximum 5 tiers allowed.
-    pub fn update_discount_tiers(
-        env: Env,
-        admin: Address,
-        tiers: Vec<DiscountTier>,
-    ) -> Result<(), ContractError> {
-        admin.require_auth();
-        assert_is_admin(&env, &admin)?;
-        if tiers.len() > MAX_DISCOUNT_TIERS {
-            return Err(ContractError::DiscountTierLimitExceeded);
-        }
-        env.storage()
-            .persistent()
-            .set(&constants::storage::discount_tiers(), &tiers);
-        Ok(())
-    }
+    /// Liquid balance is the total balance minus staked balance. Only liquid keys can be sold.
+    pub fn get_liquid_balance(env: Env, creator: Address, holder: Address) -> u32 {
+        let balance_key = constants::storage::key_balance(&creator, &holder);
+        let total_balance: u32 = env.storage().persistent().get(&balance_key).unwrap_or(0);
 
-    /// Read-only view: returns the current discount tiers.
-    pub fn get_discount_tiers(env: Env) -> Vec<DiscountTier> {
-        env.storage()
+        let staked_balance_key = constants::storage::staked_balance(&creator, &holder);
+        let staked_balance: u32 = env
+            .storage()
             .persistent()
-            .get::<DataKey, Vec<DiscountTier>>(&constants::storage::discount_tiers())
-            .unwrap_or(Vec::new(&env))
+            .get(&staked_balance_key)
+            .unwrap_or(0);
+
+        total_balance.saturating_sub(staked_balance)
     }
 }
 #[cfg(test)]

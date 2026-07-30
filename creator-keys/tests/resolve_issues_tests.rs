@@ -38,24 +38,24 @@ fn test_creator_supply_increments_sequential_and_fails() {
 
     // Start from a creator with supply 0.
     // Assert supply is 0 before any buy.
-    assert_eq!(client.query_supply(&creator), 0);
+    assert_eq!(client.get_total_key_supply(&creator), 0);
 
     // Perform three sequential buy transactions, each for 1 key.
     // Assert supply is 1, 2, and 3 after each respective buy.
     client.buy_key(&creator, &buyer, &100_i128, &None);
-    assert_eq!(client.query_supply(&creator), 1);
+    assert_eq!(client.get_total_key_supply(&creator), 1);
 
     client.buy_key(&creator, &buyer, &100_i128, &None);
-    assert_eq!(client.query_supply(&creator), 2);
+    assert_eq!(client.get_total_key_supply(&creator), 2);
 
     client.buy_key(&creator, &buyer, &100_i128, &None);
-    assert_eq!(client.query_supply(&creator), 3);
+    assert_eq!(client.get_total_key_supply(&creator), 3);
 
     // Assert a failed buy (insufficient funds / payment less than price) does not increment the supply.
     // Here, key price is 100, we try to pay 50.
     let result = client.try_buy_key(&creator, &buyer, &50_i128, &None);
     assert!(result.is_err());
-    assert_eq!(client.query_supply(&creator), 3);
+    assert_eq!(client.get_total_key_supply(&creator), 3);
 }
 
 #[test]
@@ -205,7 +205,7 @@ fn test_buy_event_price_paid_matches_pre_buy_query_price() {
         let p = query_price(&client, &creator);
         client.buy_key(&creator, &buyer, &p, &None);
     }
-    assert_eq!(client.query_supply(&creator), 4);
+    assert_eq!(client.get_total_key_supply(&creator), 4);
 
     // Supply Step 4
     let price_at_4 = query_price(&client, &creator);
@@ -232,7 +232,7 @@ fn test_buy_event_price_paid_matches_pre_buy_query_price() {
         let p = query_price(&client, &creator);
         client.buy_key(&creator, &buyer, &p, &None);
     }
-    assert_eq!(client.query_supply(&creator), 9);
+    assert_eq!(client.get_total_key_supply(&creator), 9);
 
     // Supply Step 9
     let price_at_9 = query_price(&client, &creator);
@@ -270,7 +270,7 @@ fn test_sell_updates_creator_supply_and_seller_balance_atomically() {
         client.buy_key(&creator, &seller, &price, &None);
     }
 
-    assert_eq!(client.query_supply(&creator), 3);
+    assert_eq!(client.get_total_key_supply(&creator), 3);
     assert_eq!(client.get_key_balance(&creator, &seller), 3);
 
     // Execute a sell of 2 keys
@@ -279,7 +279,7 @@ fn test_sell_updates_creator_supply_and_seller_balance_atomically() {
 
     // Read creator supply and seller holder balance immediately after transaction
     // Assert supply is 1 and seller balance is 1 in the same post-transaction block
-    let post_sell_supply = client.query_supply(&creator);
+    let post_sell_supply = client.get_total_key_supply(&creator);
     let post_sell_balance = client.get_key_balance(&creator, &seller);
 
     assert_eq!(post_sell_supply, 1);
