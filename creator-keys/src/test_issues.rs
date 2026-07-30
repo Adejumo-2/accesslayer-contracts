@@ -709,6 +709,7 @@ mod issue_tests {
     #[test]
     fn test_query_price_at_boundary_supplies() {
         let env = Env::default();
+        env.mock_all_auths();
         let contract_id = env.register(CreatorKeysContract, ());
         let client = CreatorKeysContractClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
@@ -776,6 +777,7 @@ mod issue_tests {
     #[test]
     fn test_protocol_fee_calculation_at_boundary_supplies() {
         let env = Env::default();
+        env.mock_all_auths();
         let contract_id = env.register(CreatorKeysContract, ());
         let client = CreatorKeysContractClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
