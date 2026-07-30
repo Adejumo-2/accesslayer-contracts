@@ -363,6 +363,18 @@ pub mod constants {
         pub fn staked_balance(creator: &Address, holder: &Address) -> DataKey {
             DataKey::StakedBalance(creator.clone(), holder.clone())
         }
+
+        pub fn key_balance(creator: &Address, holder: &Address) -> DataKey {
+            key_balance_key(creator, holder)
+        }
+
+        pub fn max_keys_per_wallet(creator: &Address) -> DataKey {
+            DataKey::MaxKeysPerWallet(creator.clone())
+        }
+
+        pub fn referral_fee_bps() -> DataKey {
+            DataKey::ReferralFeeBps
+        }
     }
 
     fn creator_key(creator: &Address) -> DataKey {
@@ -574,6 +586,8 @@ pub enum DataKey {
     CoCreatorFeeBalance(Address, Address),
     Whitelist(Address),
     StakedBalance(Address, Address), // (creator, holder) -> staked amount
+    MaxKeysPerWallet(Address),
+    ReferralFeeBps,
 }
 
 /// Time-locked key allocation for creator self-vesting.
