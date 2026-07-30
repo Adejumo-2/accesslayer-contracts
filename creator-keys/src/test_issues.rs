@@ -721,8 +721,9 @@ mod issue_tests {
         let creator = register_creator(&env, &client, None);
         for supply in [0u64, 1u64, 50u64] {
             let queried_price = client.query_price(&creator, &supply);
-            let expected_price =
-                compute_bonding_curve_price(&env, &creator, base_price, supply as u32).unwrap();
+            let expected_price = env.as_contract(&contract_id, || {
+                compute_bonding_curve_price(&env, &creator, base_price, supply as u32).unwrap()
+            });
             assert_eq!(
                 queried_price, expected_price,
                 "query_price output must match buy-path bonding curve formula for supply {}",
@@ -767,9 +768,10 @@ mod issue_tests {
         );
         for supply in [0u64, 1u64, 50u64] {
             let queried_price = client.query_price(&quad_creator, &supply);
-            let expected_price =
+            let expected_price = env.as_contract(&contract_id, || {
                 compute_bonding_curve_price(&env, &quad_creator, base_price, supply as u32)
-                    .unwrap();
+                    .unwrap()
+            });
             assert_eq!(queried_price, expected_price);
         }
     }
