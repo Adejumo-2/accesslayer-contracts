@@ -1,5 +1,5 @@
 //! Integration tests for admin-only functions reverting when called by a non-admin.
-//!
+//
 //! Every function gated by `assert_is_admin` must reject a non-admin caller with
 //! `ContractError::Unauthorized` and must not mutate any contract state.
 
