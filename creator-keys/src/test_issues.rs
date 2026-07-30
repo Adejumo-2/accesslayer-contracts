@@ -767,7 +767,8 @@ mod issue_tests {
         for supply in [0u64, 1u64, 50u64] {
             let queried_price = client.query_price(&quad_creator, &supply);
             let expected_price =
-                compute_bonding_curve_price(&env, &quad_creator, base_price, supply as u32).unwrap();
+                compute_bonding_curve_price(&env, &quad_creator, base_price, supply as u32)
+                    .unwrap();
             assert_eq!(queried_price, expected_price);
         }
     }
@@ -783,7 +784,7 @@ mod issue_tests {
         client.set_key_price(&admin, &base_price);
 
         let protocol_bps = 250u32; // 2.5%
-        let creator_bps = 500u32;  // 5.0%
+        let creator_bps = 500u32; // 5.0%
         client.set_fee_config(&admin, &creator_bps, &protocol_bps);
 
         let creator = register_creator(&env, &client, None);
