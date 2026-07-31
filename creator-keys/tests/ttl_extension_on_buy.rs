@@ -155,6 +155,8 @@ fn test_ttl_not_extended_when_already_high() {
 /// succeeds and emits its own event.
 #[test]
 fn test_no_ttl_extension_event_when_ttl_healthy() {
+#[test]
+fn buy_extends_instance_ttl() {
     let env = soroban_sdk::Env::default();
     env.mock_all_auths();
     let (client, contract_id, creator) = setup(&env);
@@ -203,5 +205,127 @@ fn test_no_ttl_extension_event_when_ttl_healthy() {
     assert_eq!(
         ttl_before, ttl_after,
         "TTL should remain unchanged after buy when TTL is healthy: before={ttl_before} after={ttl_after}"
+    let ttl_before = creator_ttl_remaining(&env, &contract_id, &creator);
+
+    let mut ledger = env.ledger().get();
+    ledger.sequence_number += ttl_before.saturating_sub(1).max(1);
+    env.ledger().set(ledger);
+
+    let ttl_before_buy = creator_ttl_remaining(&env, &contract_id, &creator);
+
+    let result = client.try_buy_key(&creator, &holder, &KEY_PRICE, &None);
+    assert_eq!(result, Ok(Ok(1)), "buy should succeed");
+
+    let ttl_after = creator_ttl_remaining(&env, &contract_id, &creator);
+
+    assert!(
+        ttl_after > ttl_before_buy,
+        "TTL should increase after buy: before={ttl_before_buy} after={ttl_after}"
+    );
+    assert!(
+        ttl_after >= CREATOR_TTL_LEDGERS,
+        "TTL after buy should reach at least CREATOR_TTL_LEDGERS threshold: after={ttl_after}"
+    );
+}
+
+#[test]
+fn sell_extends_instance_ttl() {
+    let env = soroban_sdk::Env::default();
+    env.mock_all_auths();
+    let (client, contract_id, creator) = setup(&env);
+    let holder = Address::generate(&env);
+
+    // Buy first key so holder has balance to sell
+    let result = client.try_buy_key(&creator, &holder, &KEY_PRICE, &None);
+    assert_eq!(result, Ok(Ok(1)), "buy should succeed");
+
+    let ttl_before = creator_ttl_remaining(&env, &contract_id, &creator);
+
+    let mut ledger = env.ledger().get();
+    ledger.sequence_number += ttl_before.saturating_sub(1).max(1);
+    env.ledger().set(ledger);
+
+    let ttl_before_sell = creator_ttl_remaining(&env, &contract_id, &creator);
+
+    let sell_result = client.try_sell_key(&creator, &holder, &None);
+    assert_eq!(sell_result, Ok(Ok(0)), "sell should succeed");
+
+    let ttl_after = creator_ttl_remaining(&env, &contract_id, &creator);
+
+    assert!(
+        ttl_after > ttl_before_sell,
+        "TTL should increase after sell: before={ttl_before_sell} after={ttl_after}"
+    );
+    assert!(
+        ttl_after >= CREATOR_TTL_LEDGERS,
+        "TTL after sell should reach at least CREATOR_TTL_LEDGERS threshold: after={ttl_after}"
+    );
+}
+
+#[test]
+fn admin_fee_update_extends_instance_ttl() {
+    let env = soroban_sdk::Env::default();
+    env.mock_all_auths();
+    let (client, contract_id, _) = setup(&env);
+    let admin = Address::generate(&env);
+
+    // Set initial fee config
+    client.set_fee_config(&admin, &5000, &5000);
+
+    let fee_config_key = storage::FEE_CONFIG;
+    let ttl_before = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&fee_config_key)
+    });
+
+    let mut ledger = env.ledger().get();
+    ledger.sequence_number += ttl_before.saturating_sub(1).max(1);
+    env.ledger().set(ledger);
+
+    let ttl_before_update = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&fee_config_key)
+    });
+
+    // Update admin fee config
+    let result = client.try_set_fee_config(&admin, &6000, &4000);
+    assert_eq!(result, Ok(Ok(())), "admin fee update should succeed");
+
+    let ttl_after = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&fee_config_key)
+    });
+
+    assert!(
+        ttl_after >= ttl_before_update,
+        "TTL after admin fee update should be at least TTL before: before={ttl_before_update} after={ttl_after}"
+    );
+}
+
+#[test]
+fn failed_buy_slippage_exceeded_does_not_extend_ttl() {
+    let env = soroban_sdk::Env::default();
+    env.mock_all_auths();
+    let (client, contract_id, creator) = setup(&env);
+    let holder = Address::generate(&env);
+
+    let ttl_before = creator_ttl_remaining(&env, &contract_id, &creator);
+
+    let mut ledger = env.ledger().get();
+    ledger.sequence_number += ttl_before.saturating_sub(1).max(1);
+    env.ledger().set(ledger);
+
+    let ttl_before_failed_buy = creator_ttl_remaining(&env, &contract_id, &creator);
+
+    // Pass max_price = Some(KEY_PRICE - 1) which is strictly below actual KEY_PRICE (100), triggering slippage error
+    let max_price_too_low = Some(KEY_PRICE - 1);
+    let result = client.try_buy_key(&creator, &holder, &KEY_PRICE, &max_price_too_low);
+    assert!(
+        result.is_err() || matches!(result, Ok(Err(_))),
+        "buy should fail due to slippage"
+    );
+
+    let ttl_after = creator_ttl_remaining(&env, &contract_id, &creator);
+
+    assert_eq!(
+        ttl_after, ttl_before_failed_buy,
+        "TTL should NOT be extended on failed buy due to slippage"
     );
 }

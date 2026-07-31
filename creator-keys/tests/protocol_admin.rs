@@ -73,9 +73,9 @@ fn test_get_protocol_admin_overwrite_returns_latest() {
     let second_admin = Address::generate(&env);
 
     client.set_protocol_admin(&admin, &first_admin);
-    assert_eq!(client.get_protocol_admin(), Some(first_admin));
+    assert_eq!(client.get_protocol_admin(), Some(first_admin.clone()));
 
-    client.set_protocol_admin(&admin, &second_admin);
+    client.set_protocol_admin(&first_admin, &second_admin);
     assert_eq!(client.get_protocol_admin(), Some(second_admin));
 }
 
