@@ -143,8 +143,7 @@ fn assert_event_topic_matches(env: &Env, event: &(Address, Vec<Val>, Val), expec
     assert_eq!(
         actual_topic, expected_topic,
         "event topic mismatch: expected {:?}, got {:?}",
-        expected_topic,
-        actual_topic
+        expected_topic, actual_topic
     );
 }
 
@@ -452,15 +451,21 @@ fn test_assert_event_topic_matches_panics_on_buy_vs_sell_mismatch() {
     fixture.register_creator(&env, "alice");
     fixture.buy_key(&buyer, KEY_PRICE);
 
-    let buy_event = env.events().all().iter().rev().find(|(_, topics, _)| {
-        topics
-            .get(events::TOPIC_EVENT_NAME_INDEX)
-            .map(|v| {
-                let name: Symbol = v.into_val(&env);
-                name == events::BUY_EVENT_NAME
-            })
-            .unwrap_or(false)
-    }).expect("buy event should be present");
+    let buy_event = env
+        .events()
+        .all()
+        .iter()
+        .rev()
+        .find(|(_, topics, _)| {
+            topics
+                .get(events::TOPIC_EVENT_NAME_INDEX)
+                .map(|v| {
+                    let name: Symbol = v.into_val(&env);
+                    name == events::BUY_EVENT_NAME
+                })
+                .unwrap_or(false)
+        })
+        .expect("buy event should be present");
 
     assert_event_topic_matches(&env, &buy_event, events::SELL_EVENT_NAME);
 }
@@ -475,15 +480,21 @@ fn test_assert_event_topic_matches_passes_on_matching_topic() {
     fixture.register_creator(&env, "alice");
     fixture.buy_key(&buyer, KEY_PRICE);
 
-    let buy_event = env.events().all().iter().rev().find(|(_, topics, _)| {
-        topics
-            .get(events::TOPIC_EVENT_NAME_INDEX)
-            .map(|v| {
-                let name: Symbol = v.into_val(&env);
-                name == events::BUY_EVENT_NAME
-            })
-            .unwrap_or(false)
-    }).expect("buy event should be present");
+    let buy_event = env
+        .events()
+        .all()
+        .iter()
+        .rev()
+        .find(|(_, topics, _)| {
+            topics
+                .get(events::TOPIC_EVENT_NAME_INDEX)
+                .map(|v| {
+                    let name: Symbol = v.into_val(&env);
+                    name == events::BUY_EVENT_NAME
+                })
+                .unwrap_or(false)
+        })
+        .expect("buy event should be present");
 
     assert_event_topic_matches(&env, &buy_event, events::BUY_EVENT_NAME);
 }
@@ -509,15 +520,21 @@ fn test_assert_event_topic_mismatch_message_identifies_topics() {
     fixture.register_creator(&env, "alice");
     fixture.buy_key(&buyer, KEY_PRICE);
 
-    let buy_event = env.events().all().iter().rev().find(|(_, topics, _)| {
-        topics
-            .get(events::TOPIC_EVENT_NAME_INDEX)
-            .map(|v| {
-                let name: Symbol = v.into_val(&env);
-                name == events::BUY_EVENT_NAME
-            })
-            .unwrap_or(false)
-    }).expect("buy event should be present");
+    let buy_event = env
+        .events()
+        .all()
+        .iter()
+        .rev()
+        .find(|(_, topics, _)| {
+            topics
+                .get(events::TOPIC_EVENT_NAME_INDEX)
+                .map(|v| {
+                    let name: Symbol = v.into_val(&env);
+                    name == events::BUY_EVENT_NAME
+                })
+                .unwrap_or(false)
+        })
+        .expect("buy event should be present");
 
     let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         assert_event_topic_matches(&env, &buy_event, events::SELL_EVENT_NAME);
@@ -527,7 +544,10 @@ fn test_assert_event_topic_mismatch_message_identifies_topics() {
     let message = err
         .downcast_ref::<std::string::String>()
         .cloned()
-        .or_else(|| err.downcast_ref::<&str>().map(|s| std::string::String::from(*s)))
+        .or_else(|| {
+            err.downcast_ref::<&str>()
+                .map(|s| std::string::String::from(*s))
+        })
         .unwrap_or_default();
     assert!(
         message.contains("event topic mismatch"),
