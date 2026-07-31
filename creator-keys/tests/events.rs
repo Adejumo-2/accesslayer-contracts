@@ -142,7 +142,8 @@ fn assert_event_topic_matches(env: &Env, event: &(Address, Vec<Val>, Val), expec
 
     assert_eq!(
         actual_topic, expected_topic,
-        "event topic should match expected contract identifier"
+        "event topic mismatch: expected {:?}, got {:?}",
+        expected_topic, actual_topic
     );
 }
 
@@ -301,7 +302,7 @@ fn test_register_creator_event_fires_once() {
 }
 
 #[test]
-#[should_panic(expected = "event topic should match expected contract identifier")]
+#[should_panic(expected = "event topic mismatch")]
 fn test_assert_event_topic_matches_rejects_unexpected_identifier() {
     let env = Env::default();
     env.mock_all_auths();
@@ -436,5 +437,131 @@ fn test_sell_key_event_payload_field_order_is_documented() {
     assert_eq!(
         events::SELL_EVENT_DATA_FIELDS,
         ["seller", "creator_id", "quantity", "proceeds", "ledger"]
+    );
+}
+
+#[test]
+#[should_panic(expected = "event topic mismatch")]
+fn test_assert_event_topic_matches_panics_on_buy_vs_sell_mismatch() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let fixture = EventFixture::new(&env);
+    let buyer = Address::generate(&env);
+
+    fixture.register_creator(&env, "alice");
+    fixture.buy_key(&buyer, KEY_PRICE);
+
+    let buy_event = env
+        .events()
+        .all()
+        .iter()
+        .rev()
+        .find(|(_, topics, _)| {
+            topics
+                .get(events::TOPIC_EVENT_NAME_INDEX)
+                .map(|v| {
+                    let name: Symbol = v.into_val(&env);
+                    name == events::BUY_EVENT_NAME
+                })
+                .unwrap_or(false)
+        })
+        .expect("buy event should be present");
+
+    assert_event_topic_matches(&env, &buy_event, events::SELL_EVENT_NAME);
+}
+
+#[test]
+fn test_assert_event_topic_matches_passes_on_matching_topic() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let fixture = EventFixture::new(&env);
+    let buyer = Address::generate(&env);
+
+    fixture.register_creator(&env, "alice");
+    fixture.buy_key(&buyer, KEY_PRICE);
+
+    let buy_event = env
+        .events()
+        .all()
+        .iter()
+        .rev()
+        .find(|(_, topics, _)| {
+            topics
+                .get(events::TOPIC_EVENT_NAME_INDEX)
+                .map(|v| {
+                    let name: Symbol = v.into_val(&env);
+                    name == events::BUY_EVENT_NAME
+                })
+                .unwrap_or(false)
+        })
+        .expect("buy event should be present");
+
+    assert_event_topic_matches(&env, &buy_event, events::BUY_EVENT_NAME);
+}
+
+#[test]
+#[should_panic(expected = "event topic should be present")]
+fn test_assert_event_topic_matches_panics_when_no_topics() {
+    let env = Env::default();
+    let addr = Address::generate(&env);
+    let empty_topics: Vec<Val> = Vec::new(&env);
+    let event = (addr, empty_topics, 0_i32.into_val(&env));
+
+    assert_event_topic_matches(&env, &event, events::BUY_EVENT_NAME);
+}
+
+#[test]
+fn test_assert_event_topic_mismatch_message_identifies_topics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let fixture = EventFixture::new(&env);
+    let buyer = Address::generate(&env);
+
+    fixture.register_creator(&env, "alice");
+    fixture.buy_key(&buyer, KEY_PRICE);
+
+    let buy_event = env
+        .events()
+        .all()
+        .iter()
+        .rev()
+        .find(|(_, topics, _)| {
+            topics
+                .get(events::TOPIC_EVENT_NAME_INDEX)
+                .map(|v| {
+                    let name: Symbol = v.into_val(&env);
+                    name == events::BUY_EVENT_NAME
+                })
+                .unwrap_or(false)
+        })
+        .expect("buy event should be present");
+
+    let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        assert_event_topic_matches(&env, &buy_event, events::SELL_EVENT_NAME);
+    }))
+    .unwrap_err();
+
+    let message = err
+        .downcast_ref::<std::string::String>()
+        .cloned()
+        .or_else(|| {
+            err.downcast_ref::<&str>()
+                .map(|s| std::string::String::from(*s))
+        })
+        .unwrap_or_default();
+    assert!(
+        message.contains("event topic mismatch"),
+        "message should indicate topic mismatch, got: {}",
+        message
+    );
+    assert!(
+        message.contains(&format!("{:?}", events::BUY_EVENT_NAME)),
+        "message should identify actual topic, got: {}",
+        message
+    );
+    assert!(
+        message.contains(&format!("{:?}", events::SELL_EVENT_NAME)),
+        "message should identify expected topic, got: {}",
+        message
     );
 }
