@@ -130,7 +130,7 @@ fn test_protocol_fee_rounding_is_floor_not_ceiling() {
     // 1. Price = 999: 999 * 1000 / 10000 = 99.9 stroops
     // Floor is 99, ceiling would be 100.
     let key_price = 999_i128;
-    set_pricing_and_fees(&env, &client, key_price, creator_bps, protocol_bps);
+    let admin = set_pricing_and_fees(&env, &client, key_price, creator_bps, protocol_bps);
 
     let creator1 = register_test_creator(&env, &client, "floor_test_999");
     let quote1 = client.get_buy_quote(&creator1);
@@ -150,7 +150,7 @@ fn test_protocol_fee_rounding_is_floor_not_ceiling() {
     // 2. Price = 1: 1 * 1000 / 10000 = 0.1 stroops
     // Floor is 0, ceiling would be 1.
     let key_price_dust = 1_i128;
-    set_pricing_and_fees(&env, &client, key_price_dust, creator_bps, protocol_bps);
+    client.set_key_price(&admin, &key_price_dust);
 
     let creator2 = register_test_creator(&env, &client, "floor_test_1");
     let quote2 = client.get_buy_quote(&creator2);
@@ -170,7 +170,7 @@ fn test_protocol_fee_rounding_is_floor_not_ceiling() {
     // 3. Price = 1001: 1001 * 1000 / 10000 = 100.1 stroops
     // Floor is 100, ceiling would be 101.
     let key_price_1001 = 1001_i128;
-    set_pricing_and_fees(&env, &client, key_price_1001, creator_bps, protocol_bps);
+    client.set_key_price(&admin, &key_price_1001);
 
     let creator3 = register_test_creator(&env, &client, "floor_test_1001");
     let quote3 = client.get_buy_quote(&creator3);

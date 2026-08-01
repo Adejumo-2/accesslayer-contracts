@@ -20,6 +20,7 @@ fn test_initialization_event_emitted_on_first_set_fee_config() {
 
     let admin = Address::generate(&env);
     let recipient = Address::generate(&env);
+    client.set_protocol_admin(&admin, &admin);
     client.set_protocol_fee_recipient(&admin, &recipient);
 
     let test_ledger = 10u32;
@@ -67,6 +68,8 @@ fn test_initialization_event_not_emitted_on_reinit() {
     let (client, _) = register_creator_keys(&env);
 
     let admin = Address::generate(&env);
+
+    client.set_protocol_admin(&admin, &admin);
 
     // First initialization
     client.set_fee_config(&admin, &9000u32, &1000u32);

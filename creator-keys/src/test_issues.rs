@@ -114,6 +114,7 @@ mod issue_tests {
         let client = CreatorKeysContractClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
+        client.set_protocol_admin(&admin, &admin);
         client.set_key_price(&admin, &KEY_PRICE);
         client.set_fee_config(&admin, &10_000, &0);
 
@@ -788,6 +789,7 @@ mod issue_tests {
 
         let protocol_bps = 250u32; // 2.5%
         let creator_bps = 500u32; // 5.0%
+        client.set_protocol_admin(&admin, &admin);
         client.set_fee_config(&admin, &creator_bps, &protocol_bps);
 
         let creator = register_creator(&env, &client, None);

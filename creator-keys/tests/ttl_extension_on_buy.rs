@@ -221,6 +221,8 @@ fn admin_fee_update_extends_instance_ttl() {
     let (client, contract_id, _) = setup(&env);
     let admin = Address::generate(&env);
 
+    client.set_protocol_admin(&admin, &admin);
+
     // Set initial fee config
     client.set_fee_config(&admin, &5000, &5000);
 

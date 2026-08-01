@@ -2444,6 +2444,7 @@ impl CreatorKeysContract {
         protocol_bps: u32,
     ) -> Result<(), ContractError> {
         admin.require_auth();
+        assert_is_admin(&env, &admin)?;
         fee::assert_valid_fee_bps(creator_bps, protocol_bps)?;
 
         let config = fee::FeeConfig {
@@ -2668,6 +2669,7 @@ impl CreatorKeysContract {
         recipient: Address,
     ) -> Result<(), ContractError> {
         admin.require_auth();
+        assert_is_admin(&env, &admin)?;
         validate_non_zero_address(&env, &recipient)?;
 
         let old_recipient: Option<Address> = env
@@ -4527,6 +4529,7 @@ mod tests {
         let client = super::CreatorKeysContractClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
 
+        client.set_protocol_admin(&admin, &admin);
         client.set_fee_config(&admin, &9000, &1000);
 
         let bps = env.as_contract(&contract_id, || super::read_protocol_fee_bps(&env));

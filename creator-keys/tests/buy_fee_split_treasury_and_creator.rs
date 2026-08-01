@@ -26,6 +26,7 @@ fn test_buy_splits_fees_correctly_between_treasury_and_creator() {
 
     // Configure pricing and fee split: 500 bps (5%) protocol fee, 200 bps (2%) creator fee
     client.set_key_price(&admin, &gross_cost);
+    client.set_protocol_admin(&admin, &admin);
     client.set_fee_config(&admin, &CREATOR_BPS, &PROTOCOL_BPS);
 
     let protocol_recipient = soroban_sdk::Address::generate(&env);
@@ -106,6 +107,7 @@ fn test_buy_fee_split_accumulates_across_multiple_buys() {
     let gross_cost: i128 = 5 * STROOPS_PER_DISPLAY_UNIT; // 5 XLM = 50,000,000 stroops
 
     client.set_key_price(&admin, &gross_cost);
+    client.set_protocol_admin(&admin, &admin);
     client.set_fee_config(&admin, &CREATOR_BPS, &PROTOCOL_BPS);
 
     let creator = register_test_creator(&env, &client, "bob");
@@ -145,6 +147,7 @@ fn test_buy_fee_split_no_stroop_rounding_error_at_odd_gross_cost() {
     let gross_cost: i128 = 1_234_567; // Odd stroop amount to verify integer arithmetic precision
 
     client.set_key_price(&admin, &gross_cost);
+    client.set_protocol_admin(&admin, &admin);
     client.set_fee_config(&admin, &CREATOR_BPS, &PROTOCOL_BPS);
 
     let creator = register_test_creator(&env, &client, "carol");

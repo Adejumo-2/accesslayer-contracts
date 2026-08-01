@@ -23,10 +23,7 @@ const PROTOCOL_BPS: u32 = 1_000;
 fn test_buy_and_sell_revert_while_paused_then_buy_succeeds_after_unpause() {
     let env = test_env_with_auths();
     let (client, _) = register_creator_keys(&env);
-    set_pricing_and_fees(&env, &client, KEY_PRICE, CREATOR_BPS, PROTOCOL_BPS);
-
-    let admin = Address::generate(&env);
-    client.set_protocol_admin(&admin, &admin);
+    let admin = set_pricing_and_fees(&env, &client, KEY_PRICE, CREATOR_BPS, PROTOCOL_BPS);
 
     let creator = register_test_creator(&env, &client, "alice");
     let buyer = Address::generate(&env);
