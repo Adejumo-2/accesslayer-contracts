@@ -50,6 +50,7 @@ fn test_creator_fee_bps_updates_sequentially() {
     let env = test_env_with_auths();
     let (client, _) = register_creator_keys(&env);
     let admin = Address::generate(&env);
+    client.set_protocol_admin(&admin, &admin);
 
     // First ever update (no old config), assert old_bps is 0
     client.set_fee_config(&admin, &200, &9800);
