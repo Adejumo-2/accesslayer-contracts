@@ -91,7 +91,7 @@ fn test_protocol_admin_unchanged_after_fee_config_update() {
     client.set_protocol_admin(&admin, &protocol_admin);
 
     let before = client.get_protocol_admin();
-    client.set_fee_config(&admin, &8000u32, &2000u32);
+    client.set_fee_config(&protocol_admin, &8000u32, &2000u32);
     let after = client.get_protocol_admin();
 
     assert_eq!(before, Some(protocol_admin));

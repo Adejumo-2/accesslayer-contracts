@@ -114,6 +114,7 @@ mod issue_tests {
         let client = CreatorKeysContractClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
+        client.set_protocol_admin(&admin, &admin);
         client.set_key_price(&admin, &KEY_PRICE);
         client.set_fee_config(&admin, &10_000, &0);
 

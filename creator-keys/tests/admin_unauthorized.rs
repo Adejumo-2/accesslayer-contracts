@@ -5,7 +5,7 @@
 
 mod contract_test_env;
 
-use contract_test_env::{register_creator_keys, set_pricing_and_fees, set_protocol_fee_bps, test_env_with_auths};
+use contract_test_env::{register_creator_keys, set_pricing_and_fees, test_env_with_auths};
 use creator_keys::{ContractError, CreatorKeysContractClient};
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
@@ -148,13 +148,13 @@ fn test_set_fee_config_no_state_change_on_non_admin_call() {
     let env = test_env_with_auths();
     let (client, _admin) = full_setup(&env);
 
-    let protocol_bps_before = client.get_protocol_fee_bps().unwrap();
+    let protocol_bps_before = client.get_protocol_fee_bps();
 
     let non_admin = Address::generate(&env);
     let result = client.try_set_fee_config(&non_admin, &8000u32, &2000u32);
     assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
 
-    let protocol_bps_after = client.get_protocol_fee_bps().unwrap();
+    let protocol_bps_after = client.get_protocol_fee_bps();
     assert_eq!(
         protocol_bps_before, protocol_bps_after,
         "protocol fee bps must not change when non-admin set_fee_config call is rejected"
