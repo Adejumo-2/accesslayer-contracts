@@ -161,6 +161,7 @@ fn test_buy_event_price_paid_matches_pre_buy_query_price() {
 
     let admin = Address::generate(&env);
     client.set_key_price(&admin, &100_i128);
+    client.set_protocol_admin(&admin, &admin);
     client.set_fee_config(&admin, &9000u32, &1000u32);
 
     let creator = Address::generate(&env);
@@ -261,6 +262,7 @@ fn test_sell_updates_creator_supply_and_seller_balance_atomically() {
     env.mock_all_auths();
 
     let (client, admin, creator) = setup(&env);
+    client.set_protocol_admin(&admin, &admin);
     client.set_fee_config(&admin, &9000u32, &1000u32);
     let seller = Address::generate(&env);
 

@@ -4529,6 +4529,7 @@ mod tests {
         let client = super::CreatorKeysContractClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
 
+        client.set_protocol_admin(&admin, &admin);
         client.set_fee_config(&admin, &9000, &1000);
 
         let bps = env.as_contract(&contract_id, || super::read_protocol_fee_bps(&env));
