@@ -29,6 +29,15 @@ fn setup(
     soroban_sdk::Address,
 ) {
     let (client, contract_id) = register_creator_keys(env);
+    // The test env archives the contract instance and code after ~4095
+    // ledgers by default. Bump them to the full extension window so tests
+    // that advance the ledger far into the future (to drain creator TTL)
+    // can still invoke the contract.
+    env.deployer().extend_ttl(
+        contract_id.clone(),
+        CREATOR_TTL_LEDGERS,
+        CREATOR_TTL_LEDGERS,
+    );
     set_key_price_for_tests(env, &client, KEY_PRICE);
     let creator = register_test_creator(env, &client, "alice");
     (client, contract_id, creator)
@@ -155,8 +164,6 @@ fn test_ttl_not_extended_when_already_high() {
 /// succeeds and emits its own event.
 #[test]
 fn test_no_ttl_extension_event_when_ttl_healthy() {
-#[test]
-fn buy_extends_instance_ttl() {
     let env = soroban_sdk::Env::default();
     env.mock_all_auths();
     let (client, contract_id, creator) = setup(&env);
@@ -205,6 +212,16 @@ fn buy_extends_instance_ttl() {
     assert_eq!(
         ttl_before, ttl_after,
         "TTL should remain unchanged after buy when TTL is healthy: before={ttl_before} after={ttl_after}"
+    );
+}
+
+#[test]
+fn buy_extends_instance_ttl() {
+    let env = soroban_sdk::Env::default();
+    env.mock_all_auths();
+    let (client, contract_id, creator) = setup(&env);
+    let holder = Address::generate(&env);
+
     let ttl_before = creator_ttl_remaining(&env, &contract_id, &creator);
 
     let mut ledger = env.ledger().get();
