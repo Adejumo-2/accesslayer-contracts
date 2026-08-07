@@ -375,6 +375,12 @@ pub mod constants {
         pub fn referral_fee_bps() -> DataKey {
             DataKey::ReferralFeeBps
         }
+
+        /// Absolute live-until ledger the contract last set for `creator`'s
+        /// profile key, used to decide whether to emit the TTL-extension event.
+        pub fn creator_ttl_live_until(creator: &Address) -> DataKey {
+            DataKey::CreatorTtlLiveUntil(creator.clone())
+        }
     }
 
     fn creator_key(creator: &Address) -> DataKey {
@@ -515,6 +521,15 @@ pub const KEY_DECIMALS: u32 = 7;
 /// buy or sell operation to prevent active creator state from expiring.
 pub const CREATOR_TTL_LEDGERS: u32 = 6311520; // ~2 years at 5s per ledger
 
+/// Minimum remaining TTL (in ledgers) that triggers a TTL extension event.
+///
+/// When the creator key's remaining TTL drops strictly below this threshold,
+/// the next trade will emit a [`events::TTL_EXTENDED_EVENT_NAME`] event.
+/// When the remaining TTL is at or above this value, the extension is still
+/// performed (via Soroban's `extend_ttl` SDK call, which is a no-op when the
+/// entry already has a healthy expiration), but no event is emitted.
+pub const TTL_EXTENSION_THRESHOLD: u32 = 100;
+
 /// TTL (time-to-live) extension decision logic.
 ///
 /// Storage TTL extension should only fire when the remaining TTL drops below
@@ -588,6 +603,11 @@ pub enum DataKey {
     StakedBalance(Address, Address), // (creator, holder) -> staked amount
     MaxKeysPerWallet(Address),
     ReferralFeeBps,
+    /// Absolute live-until ledger the contract last set for the creator key
+    /// via `extend_ttl`. Tracks the TTL extension state so the contract can
+    /// decide whether to emit the TTL-extension event without a TTL read
+    /// (the Soroban SDK does not expose TTL reads to contract code).
+    CreatorTtlLiveUntil(Address),
 }
 
 /// Time-locked key allocation for creator self-vesting.
@@ -1319,6 +1339,10 @@ fn settle_holder_dividends(
     env.storage()
         .persistent()
         .set(&checkpoint_key, &accumulator);
+    // Keep dividend settlement state live for the same horizon as the
+    // creator profile between trades.
+    extend_key_ttl_to_full_window(env, &pending_key);
+    extend_key_ttl_to_full_window(env, &checkpoint_key);
     Ok(())
 }
 
@@ -1341,19 +1365,53 @@ fn compute_claimable_dividend(env: &Env, creator: &Address, holder: &Address) ->
     pending.saturating_add(earned)
 }
 
+/// Extends the TTL of a freshly written storage entry to the full
+/// [`CREATOR_TTL_LEDGERS`] window.
+///
+/// Uses `CREATOR_TTL_LEDGERS` as both the threshold and the extension window.
+/// New entries start with the network-default TTL, which is shorter than
+/// `CREATOR_TTL_LEDGERS` on fresh networks; forcing the full window at write
+/// time keeps the entry's real TTL aligned with the live-until the contract
+/// tracks for the TTL-extension event.
+fn extend_key_ttl_to_full_window(env: &Env, key: &DataKey) {
+    env.storage()
+        .persistent()
+        .extend_ttl(key, CREATOR_TTL_LEDGERS, CREATOR_TTL_LEDGERS);
+}
+
 /// Extends TTL for all creator-related storage keys.
 ///
 /// This function extends the TTL of the creator's primary storage entries
 /// to prevent active creator state from expiring. Called after successful
-/// buy and sell operations. Emits a [`events::TTL_EXTENDED_EVENT_NAME`] event
-/// when the creator key's TTL was actually extended (checked via the SDK's
-/// threshold-vs-expiration logic).
+/// buy, sell, and buyback operations. Emits a [`events::TTL_EXTENDED_EVENT_NAME`]
+/// event only when the creator key's remaining TTL was below
+/// [`TTL_EXTENSION_THRESHOLD`] before this call — a healthy TTL silently
+/// skips the event.
 fn extend_creator_ttl(env: &Env, creator: &Address) {
     let current_ledger = env.ledger().sequence();
     let extend_to = current_ledger + CREATOR_TTL_LEDGERS;
     let threshold = current_ledger;
 
     let creator_key = constants::storage::creator(creator);
+    let live_until_key = constants::storage::creator_ttl_live_until(creator);
+
+    // The Soroban SDK does not expose TTL reads to contract code, so the
+    // contract tracks the live-until ledger it last set for the creator key
+    // in persistent storage ([`DataKey::CreatorTtlLiveUntil`]). The remaining
+    // TTL is derived from that value and used only to decide whether to emit
+    // the TTL-extension event. The tracked value is always <= the entry's
+    // real live-until (the network default can exceed `CREATOR_TTL_LEDGERS`),
+    // so the event may fire slightly early on such networks — never too late.
+    // The `extend_ttl` SDK calls below still run unconditionally — the
+    // runtime no-ops when the entry already has a healthy expiration.
+    let live_until: u32 = env
+        .storage()
+        .persistent()
+        .get(&live_until_key)
+        .unwrap_or(current_ledger);
+    let remaining = live_until.saturating_sub(current_ledger);
+    let needs_event = ttl::should_extend(remaining, TTL_EXTENSION_THRESHOLD);
+
     env.storage()
         .persistent()
         .extend_ttl(&creator_key, threshold, extend_to);
@@ -1412,8 +1470,17 @@ fn extend_creator_ttl(env: &Env, creator: &Address) {
         }
     }
 
-    env.events()
-        .publish(events::ttl_extended_topics(creator), extend_to);
+    // Record the new live-until ledger so future trades can re-evaluate
+    // whether the TTL-extension event should be emitted.
+    env.storage().persistent().set(&live_until_key, &extend_to);
+    extend_key_ttl_to_full_window(env, &live_until_key);
+
+    // Only emit the TTL extension event when the remaining TTL was below the
+    // extension threshold before this call. A healthy TTL silently skips the event.
+    if needs_event {
+        env.events()
+            .publish(events::ttl_extended_topics(creator), extend_to);
+    }
 }
 
 #[contract]
@@ -1560,26 +1627,27 @@ impl CreatorKeysContract {
         // Persist profile before event publication so indexers reading contract state
         // after this tx observe the same registration payload that was emitted.
         env.storage().persistent().set(&key, &profile);
-        // Set initial TTL for creator storage
+        // Set initial TTL for creator storage. The full window is forced at
+        // write time so the entry's real TTL matches the live-until the
+        // contract tracks for the TTL-extension event.
         let extend_to = current_ledger + CREATOR_TTL_LEDGERS;
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, current_ledger, extend_to);
-        env.storage()
-            .persistent()
-            .extend_ttl(&preset_key, current_ledger, extend_to);
+        extend_key_ttl_to_full_window(&env, &key);
+        extend_key_ttl_to_full_window(&env, &preset_key);
         let co_creator_key = constants::storage::co_creator(&creator);
         if env.storage().persistent().has(&co_creator_key) {
-            env.storage()
-                .persistent()
-                .extend_ttl(&co_creator_key, current_ledger, extend_to);
+            extend_key_ttl_to_full_window(&env, &co_creator_key);
         }
         let whitelist_key = constants::storage::whitelist(&creator);
         if env.storage().persistent().has(&whitelist_key) {
-            env.storage()
-                .persistent()
-                .extend_ttl(&whitelist_key, current_ledger, extend_to);
+            extend_key_ttl_to_full_window(&env, &whitelist_key);
         }
+
+        // Record the live-until the contract set for the creator key so
+        // `extend_creator_ttl` can later decide whether to emit the
+        // TTL-extension event.
+        let live_until_key = constants::storage::creator_ttl_live_until(&creator);
+        env.storage().persistent().set(&live_until_key, &extend_to);
+        extend_key_ttl_to_full_window(&env, &live_until_key);
 
         env.events().publish(
             events::register_event_topics(&profile.creator),
@@ -1699,6 +1767,9 @@ impl CreatorKeysContract {
             .ok_or(ContractError::Overflow)?;
         // Balance key is scoped by (creator, holder) so creator positions cannot collide.
         env.storage().persistent().set(&balance_key, &new_balance);
+        // Grant the balance entry the full TTL window so long-held positions
+        // survive the same horizon as creator state between trades.
+        extend_key_ttl_to_full_window(&env, &balance_key);
 
         if let Some(config) = read_protocol_fee_config(&env) {
             let (creator_fee, protocol_fee) =
@@ -2534,6 +2605,9 @@ impl CreatorKeysContract {
         env.storage()
             .persistent()
             .set(&constants::storage::KEY_PRICE, &price);
+        // Grant the price entry the full TTL window so buy/sell reads stay
+        // live for the same horizon as creator state.
+        extend_key_ttl_to_full_window(&env, &constants::storage::KEY_PRICE);
         Ok(())
     }
 
