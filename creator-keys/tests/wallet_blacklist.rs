@@ -230,3 +230,47 @@ fn test_register_creator_succeeds_after_removal_from_blacklist() {
 
     assert!(client.is_creator_registered(&creator));
 }
+
+// ---------------------------------------------------------------------------
+// only the admin can add or remove blacklist entries
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_blacklist_wallet_reverts_for_non_admin() {
+    let env = test_env_with_auths();
+    let (client, _) = register_creator_keys(&env);
+    set_protocol_admin(&env, &client);
+
+    let non_admin = Address::generate(&env);
+    let target = Address::generate(&env);
+
+    let result = client.try_blacklist_wallet(&non_admin, &target);
+    assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
+    assert!(!client.is_wallet_blacklisted(&target));
+}
+
+#[test]
+fn test_remove_from_blacklist_reverts_for_non_admin() {
+    let env = test_env_with_auths();
+    let (client, _) = register_creator_keys(&env);
+    let admin = set_protocol_admin(&env, &client);
+
+    let non_admin = Address::generate(&env);
+    let target = Address::generate(&env);
+    client.blacklist_wallet(&admin, &target);
+
+    let result = client.try_remove_from_blacklist(&non_admin, &target);
+    assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
+    assert!(client.is_wallet_blacklisted(&target));
+}
+
+#[test]
+fn test_blacklist_wallet_rejected_when_no_admin_configured() {
+    let env = test_env_with_auths();
+    let (client, _) = register_creator_keys(&env);
+
+    let caller = Address::generate(&env);
+    let target = Address::generate(&env);
+    let result = client.try_blacklist_wallet(&caller, &target);
+    assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
+}
