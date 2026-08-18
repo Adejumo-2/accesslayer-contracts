@@ -159,3 +159,74 @@ fn test_register_creator_no_state_change_for_blacklisted_wallet() {
 
     assert!(!client.is_creator_registered(&creator));
 }
+
+// ---------------------------------------------------------------------------
+// removing a wallet from the blacklist restores access
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_buy_key_succeeds_after_removal_from_blacklist() {
+    let env = test_env_with_auths();
+    let (client, _) = register_creator_keys(&env);
+    let admin = set_protocol_admin(&env, &client);
+    set_key_price_for_tests(&env, &client, 100);
+    let creator = register_test_creator(&env, &client, "alice");
+    let buyer = Address::generate(&env);
+
+    client.blacklist_wallet(&admin, &buyer);
+    assert!(client.is_wallet_blacklisted(&buyer));
+
+    let blocked = client.try_buy_key(&creator, &buyer, &100, &None);
+    assert_eq!(blocked, Err(Ok(ContractError::WalletBlacklisted)));
+
+    client.remove_from_blacklist(&admin, &buyer);
+    assert!(!client.is_wallet_blacklisted(&buyer));
+
+    let supply = client.buy_key(&creator, &buyer, &100, &None);
+    assert_eq!(supply, 1);
+    assert_eq!(client.get_key_balance(&creator, &buyer), 1);
+}
+
+#[test]
+fn test_sell_key_succeeds_after_removal_from_blacklist() {
+    let env = test_env_with_auths();
+    let (client, _) = register_creator_keys(&env);
+    let admin = set_protocol_admin(&env, &client);
+    set_key_price_for_tests(&env, &client, 100);
+    let creator = register_test_creator(&env, &client, "alice");
+    let seller = Address::generate(&env);
+
+    client.buy_key(&creator, &seller, &100, &None);
+    client.blacklist_wallet(&admin, &seller);
+    client.remove_from_blacklist(&admin, &seller);
+
+    let supply = client.sell_key(&creator, &seller, &None);
+    assert_eq!(supply, 0);
+    assert_eq!(client.get_key_balance(&creator, &seller), 0);
+}
+
+#[test]
+fn test_register_creator_succeeds_after_removal_from_blacklist() {
+    let env = test_env_with_auths();
+    let (client, _) = register_creator_keys(&env);
+    let admin = set_protocol_admin(&env, &client);
+
+    let creator = Address::generate(&env);
+    client.blacklist_wallet(&admin, &creator);
+    client.remove_from_blacklist(&admin, &creator);
+
+    client.register_creator(
+        &RegisterCreatorParams {
+            creator: creator.clone(),
+            handle: String::from_str(&env, "alice"),
+        },
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+    );
+
+    assert!(client.is_creator_registered(&creator));
+}
