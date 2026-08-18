@@ -62,3 +62,47 @@ fn test_buy_key_no_state_change_for_blacklisted_buyer() {
     );
     assert_eq!(client.get_key_balance(&creator, &buyer), 0);
 }
+
+// ---------------------------------------------------------------------------
+// sell reverts with WalletBlacklisted when the seller is blacklisted
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_sell_key_reverts_for_blacklisted_seller() {
+    let env = test_env_with_auths();
+    let (client, _) = register_creator_keys(&env);
+    let admin = set_protocol_admin(&env, &client);
+    set_key_price_for_tests(&env, &client, 100);
+    let creator = register_test_creator(&env, &client, "alice");
+    let seller = Address::generate(&env);
+
+    // Buy first, while not yet blacklisted.
+    client.buy_key(&creator, &seller, &100, &None);
+
+    client.blacklist_wallet(&admin, &seller);
+
+    let result = client.try_sell_key(&creator, &seller, &None);
+    assert_eq!(result, Err(Ok(ContractError::WalletBlacklisted)));
+}
+
+#[test]
+fn test_sell_key_no_state_change_for_blacklisted_seller() {
+    let env = test_env_with_auths();
+    let (client, _) = register_creator_keys(&env);
+    let admin = set_protocol_admin(&env, &client);
+    set_key_price_for_tests(&env, &client, 100);
+    let creator = register_test_creator(&env, &client, "alice");
+    let seller = Address::generate(&env);
+
+    client.buy_key(&creator, &seller, &100, &None);
+    client.blacklist_wallet(&admin, &seller);
+
+    let balance_before = client.get_key_balance(&creator, &seller);
+    let _ = client.try_sell_key(&creator, &seller, &None);
+    let balance_after = client.get_key_balance(&creator, &seller);
+
+    assert_eq!(
+        balance_before, balance_after,
+        "seller balance must not change when a blacklisted seller's sale is rejected"
+    );
+}
