@@ -274,3 +274,28 @@ fn test_blacklist_wallet_rejected_when_no_admin_configured() {
     let result = client.try_blacklist_wallet(&caller, &target);
     assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
 }
+
+// ---------------------------------------------------------------------------
+// blacklist is scoped per-wallet and does not affect unrelated wallets
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_blacklist_does_not_affect_other_wallets() {
+    let env = test_env_with_auths();
+    let (client, _) = register_creator_keys(&env);
+    let admin = set_protocol_admin(&env, &client);
+    set_key_price_for_tests(&env, &client, 100);
+    let creator = register_test_creator(&env, &client, "alice");
+
+    let blocked_buyer = Address::generate(&env);
+    let allowed_buyer = Address::generate(&env);
+
+    client.blacklist_wallet(&admin, &blocked_buyer);
+
+    let result = client.try_buy_key(&creator, &blocked_buyer, &100, &None);
+    assert_eq!(result, Err(Ok(ContractError::WalletBlacklisted)));
+
+    let supply = client.buy_key(&creator, &allowed_buyer, &100, &None);
+    assert_eq!(supply, 1);
+    assert_eq!(client.get_key_balance(&creator, &allowed_buyer), 1);
+}
