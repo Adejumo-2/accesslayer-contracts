@@ -106,3 +106,56 @@ fn test_sell_key_no_state_change_for_blacklisted_seller() {
         "seller balance must not change when a blacklisted seller's sale is rejected"
     );
 }
+
+// ---------------------------------------------------------------------------
+// register_creator reverts with WalletBlacklisted when the creator is blacklisted
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_register_creator_reverts_for_blacklisted_wallet() {
+    let env = test_env_with_auths();
+    let (client, _) = register_creator_keys(&env);
+    let admin = set_protocol_admin(&env, &client);
+
+    let creator = Address::generate(&env);
+    client.blacklist_wallet(&admin, &creator);
+
+    let result = client.try_register_creator(
+        &RegisterCreatorParams {
+            creator: creator.clone(),
+            handle: String::from_str(&env, "alice"),
+        },
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+    );
+    assert_eq!(result, Err(Ok(ContractError::WalletBlacklisted)));
+}
+
+#[test]
+fn test_register_creator_no_state_change_for_blacklisted_wallet() {
+    let env = test_env_with_auths();
+    let (client, _) = register_creator_keys(&env);
+    let admin = set_protocol_admin(&env, &client);
+
+    let creator = Address::generate(&env);
+    client.blacklist_wallet(&admin, &creator);
+
+    let _ = client.try_register_creator(
+        &RegisterCreatorParams {
+            creator: creator.clone(),
+            handle: String::from_str(&env, "alice"),
+        },
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+    );
+
+    assert!(!client.is_creator_registered(&creator));
+}
