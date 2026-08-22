@@ -2259,7 +2259,11 @@ impl CreatorKeysContract {
     /// Blocks a wallet from buying, selling, or registering as a creator.
     ///
     /// Only the protocol admin may call this. Emits a `blacklist` event.
-    pub fn blacklist_wallet(env: Env, admin: Address, wallet: Address) -> Result<(), ContractError> {
+    pub fn blacklist_wallet(
+        env: Env,
+        admin: Address,
+        wallet: Address,
+    ) -> Result<(), ContractError> {
         admin.require_auth();
         assert_is_admin(&env, &admin)?;
         env.storage()
