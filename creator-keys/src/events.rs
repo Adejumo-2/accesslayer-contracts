@@ -34,6 +34,12 @@ pub const PAUSE_EVENT_NAME: Symbol = symbol_short!("pause");
 /// Event name for protocol unpause.
 pub const UNPAUSE_EVENT_NAME: Symbol = symbol_short!("unpause");
 
+/// Event name for a wallet being added to the admin blacklist.
+pub const BLACKLIST_ADDED_EVENT_NAME: Symbol = symbol_short!("blk_add");
+
+/// Event name for a wallet being removed from the admin blacklist.
+pub const BLACKLIST_REMOVED_EVENT_NAME: Symbol = symbol_short!("blk_rem");
+
 /// Event name for creator registration.
 pub const REGISTER_EVENT_NAME: Symbol = symbol_short!("register");
 

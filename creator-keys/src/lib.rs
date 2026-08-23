@@ -83,6 +83,7 @@ pub enum ContractError {
     InvalidReferrer = 34,
     WalletCapExceeded = 35,
     DiscountTierLimitExceeded = 36,
+    WalletBlacklisted = 37,
 }
 
 pub mod fee {
@@ -330,6 +331,10 @@ pub mod constants {
 
         pub fn whitelist(creator: &Address) -> DataKey {
             DataKey::Whitelist(creator.clone())
+        }
+
+        pub fn blacklisted(wallet: &Address) -> DataKey {
+            DataKey::Blacklisted(wallet.clone())
         }
 
         pub fn creator(creator: &Address) -> DataKey {
@@ -608,6 +613,9 @@ pub enum DataKey {
     /// decide whether to emit the TTL-extension event without a TTL read
     /// (the Soroban SDK does not expose TTL reads to contract code).
     CreatorTtlLiveUntil(Address),
+    /// Wallet addresses the protocol admin has barred from buying, selling,
+    /// or registering as a creator.
+    Blacklisted(Address),
 }
 
 /// Time-locked key allocation for creator self-vesting.
@@ -1000,6 +1008,20 @@ fn is_paused(env: &Env) -> bool {
 fn assert_not_paused(env: &Env) -> Result<(), ContractError> {
     if is_paused(env) {
         return Err(ContractError::ProtocolPaused);
+    }
+    Ok(())
+}
+
+fn is_blacklisted(env: &Env, wallet: &Address) -> bool {
+    env.storage()
+        .persistent()
+        .get::<DataKey, bool>(&constants::storage::blacklisted(wallet))
+        .unwrap_or(false)
+}
+
+fn assert_not_blacklisted(env: &Env, wallet: &Address) -> Result<(), ContractError> {
+    if is_blacklisted(env, wallet) {
+        return Err(ContractError::WalletBlacklisted);
     }
     Ok(())
 }
@@ -1521,6 +1543,7 @@ impl CreatorKeysContract {
 
         creator.require_auth();
         assert_not_paused(&env)?;
+        assert_not_blacklisted(&env, &creator)?;
 
         validate_creator_handle(&handle)?;
         if let Some(config) = co_creator.as_ref() {
@@ -1684,6 +1707,7 @@ impl CreatorKeysContract {
     ) -> Result<u32, ContractError> {
         buyer.require_auth();
         assert_not_paused(&env)?;
+        assert_not_blacklisted(&env, &buyer)?;
 
         if payment <= 0 {
             return Err(ContractError::NotPositiveAmount);
@@ -1852,6 +1876,7 @@ impl CreatorKeysContract {
     ) -> Result<u32, ContractError> {
         seller.require_auth();
         assert_not_paused(&env)?;
+        assert_not_blacklisted(&env, &seller)?;
 
         let mut profile: CreatorProfile = read_registered_creator_profile(&env, &creator)?;
 
@@ -2229,6 +2254,48 @@ impl CreatorKeysContract {
     /// Read-only view: returns whether the protocol is currently paused.
     pub fn get_is_paused(env: Env) -> bool {
         is_paused(&env)
+    }
+
+    /// Blocks a wallet from buying, selling, or registering as a creator.
+    ///
+    /// Only the protocol admin may call this. Emits a `blacklist` event.
+    pub fn blacklist_wallet(
+        env: Env,
+        admin: Address,
+        wallet: Address,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        assert_is_admin(&env, &admin)?;
+        env.storage()
+            .persistent()
+            .set(&constants::storage::blacklisted(&wallet), &true);
+        env.events()
+            .publish((events::BLACKLIST_ADDED_EVENT_NAME, wallet), ());
+        Ok(())
+    }
+
+    /// Restores a previously blacklisted wallet's access to buy, sell, and
+    /// register as a creator.
+    ///
+    /// Only the protocol admin may call this. Emits an `unblacklist` event.
+    pub fn remove_from_blacklist(
+        env: Env,
+        admin: Address,
+        wallet: Address,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        assert_is_admin(&env, &admin)?;
+        env.storage()
+            .persistent()
+            .remove(&constants::storage::blacklisted(&wallet));
+        env.events()
+            .publish((events::BLACKLIST_REMOVED_EVENT_NAME, wallet), ());
+        Ok(())
+    }
+
+    /// Read-only view: returns whether `wallet` is currently blacklisted.
+    pub fn is_wallet_blacklisted(env: Env, wallet: Address) -> bool {
+        is_blacklisted(&env, &wallet)
     }
 
     pub fn get_key_balance(env: Env, creator: Address, wallet: Address) -> u32 {
