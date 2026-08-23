@@ -296,10 +296,7 @@ fn test_supply_equals_sum_of_holder_balances_after_net_zero_trade() {
     let bal_trader = client.get_key_balance(&creator, &trader);
     let bal_bystander = client.get_key_balance(&creator, &bystander);
 
-    assert_eq!(
-        bal_trader, 0,
-        "trader balance must be 0 after full exit"
-    );
+    assert_eq!(bal_trader, 0, "trader balance must be 0 after full exit");
     assert_eq!(
         bal_bystander, 3,
         "bystander balance must be unaffected by trader's round-trip"
@@ -513,7 +510,11 @@ fn test_sell_events_carry_correct_addresses() {
             })
             .collect();
 
-        assert_eq!(sell_events.len(), 1, "exactly 1 sell event per sell_key call");
+        assert_eq!(
+            sell_events.len(),
+            1,
+            "exactly 1 sell event per sell_key call"
+        );
 
         let (_, _, data) = sell_events[0];
         let payload: events::KeysSoldEvent = data.into_val(&env);
