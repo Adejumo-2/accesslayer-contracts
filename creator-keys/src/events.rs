@@ -84,8 +84,14 @@ pub const REGISTER_EVENT_DATA_FIELDS: [&str; 6] = [
 ];
 
 /// Stable field order for buy event payloads.
-pub const BUY_EVENT_DATA_FIELDS: [&str; 6] =
-    ["buyer", "creator_id", "quantity", "price_paid", "new_supply", "ledger"];
+pub const BUY_EVENT_DATA_FIELDS: [&str; 6] = [
+    "buyer",
+    "creator_id",
+    "quantity",
+    "price_paid",
+    "new_supply",
+    "ledger",
+];
 
 /// Stable field order for sell event payloads.
 pub const SELL_EVENT_DATA_FIELDS: [&str; 5] =
