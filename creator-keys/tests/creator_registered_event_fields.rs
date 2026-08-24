@@ -84,7 +84,10 @@ fn test_creator_registered_event_emitted_on_successful_registration() {
     register_creator(&client, &env, &creator, "alice");
 
     let count = registration_event_count(&env);
-    assert_eq!(count, 1, "exactly one CreatorRegistered event should be emitted");
+    assert_eq!(
+        count, 1,
+        "exactly one CreatorRegistered event should be emitted"
+    );
 }
 
 #[test]

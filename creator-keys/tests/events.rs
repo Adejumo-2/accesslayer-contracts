@@ -219,9 +219,7 @@ impl CreatorRegisteredEventBuilder {
 
     fn build(self) -> events::CreatorRegisteredEvent {
         let creator = self.creator.expect("creator must be set");
-        let fee_recipient = self
-            .fee_recipient
-            .unwrap_or_else(|| creator.clone());
+        let fee_recipient = self.fee_recipient.unwrap_or_else(|| creator.clone());
         events::CreatorRegisteredEvent {
             creator,
             handle: self.handle.expect("handle must be set"),
