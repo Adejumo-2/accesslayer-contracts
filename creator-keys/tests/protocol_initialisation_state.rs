@@ -35,11 +35,7 @@ const PROTOCOL_BPS: u32 = 1_500;
 const KEY_PRICE: i128 = 123_456;
 
 /// Runs the four-setter protocol initialisation sequence with the given admin.
-fn run_initialisation(
-    client: &CreatorKeysContractClient<'_>,
-    admin: &Address,
-    treasury: &Address,
-) {
+fn run_initialisation(client: &CreatorKeysContractClient<'_>, admin: &Address, treasury: &Address) {
     client.set_protocol_admin(admin, admin);
     client.set_key_price(admin, &KEY_PRICE);
     client.set_fee_config(admin, &CREATOR_BPS, &PROTOCOL_BPS);
@@ -97,10 +93,11 @@ fn test_full_initialization_sets_all_state_fields() {
         "query_price must surface the initialised base key price"
     );
 
-    let stored_price: Option<i128> = env
-        .as_contract(&contract_id, || {
-            env.storage().persistent().get(&constants::storage::KEY_PRICE)
-        });
+    let stored_price: Option<i128> = env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .get(&constants::storage::KEY_PRICE)
+    });
     assert_eq!(
         stored_price,
         Some(KEY_PRICE),
