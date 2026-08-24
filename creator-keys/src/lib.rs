@@ -2360,6 +2360,14 @@ impl CreatorKeysContract {
         env.storage().persistent().get(&key).unwrap_or(0)
     }
 
+    /// Read-only view: returns the key balance for a wallet and creator.
+    ///
+    /// Alias for [`get_key_balance`](Self::get_key_balance). Returns `0` for any wallet address
+    /// that has never bought or been transferred keys, or that has sold all keys, without panicking or returning an error.
+    pub fn get_balance(env: Env, creator: Address, wallet: Address) -> u32 {
+        Self::get_key_balance(env, creator, wallet)
+    }
+
     /// Read-only view: returns a stable view of a holder's key count for a creator.
     ///
     /// Returns a [`HolderKeyCountView`] regardless of creator registration status.
