@@ -352,17 +352,32 @@ fn test_buy_key_event_payload_tracks_new_supply_across_purchases() {
     fixture.buy_key(&buyer1, KEY_PRICE);
     let first_payload = fixture.last_buy_payload(&env);
     assert_eq!(first_payload.price_paid, KEY_PRICE);
+    assert_eq!(
+        first_payload.new_supply, 1,
+        "first buy new_supply should be 1"
+    );
 
     fixture.buy_key(&buyer2, KEY_PRICE);
     let second_payload = fixture.last_buy_payload(&env);
     assert_eq!(second_payload.price_paid, KEY_PRICE);
+    assert_eq!(
+        second_payload.new_supply, 2,
+        "second buy new_supply should be 2"
+    );
 }
 
 #[test]
 fn test_buy_key_event_payload_field_order_is_documented() {
     assert_eq!(
         events::BUY_EVENT_DATA_FIELDS,
-        ["buyer", "creator_id", "quantity", "price_paid", "ledger"]
+        [
+            "buyer",
+            "creator_id",
+            "quantity",
+            "price_paid",
+            "new_supply",
+            "ledger",
+        ]
     );
 }
 

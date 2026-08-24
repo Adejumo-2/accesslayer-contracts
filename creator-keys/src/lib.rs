@@ -1856,6 +1856,7 @@ impl CreatorKeysContract {
             creator_id: creator.clone(),
             quantity: 1,
             price_paid: price,
+            new_supply: profile.supply,
             ledger: env.ledger().sequence(),
         };
 

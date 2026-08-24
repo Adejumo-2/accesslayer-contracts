@@ -84,8 +84,14 @@ pub const REGISTER_EVENT_DATA_FIELDS: [&str; 6] = [
 ];
 
 /// Stable field order for buy event payloads.
-pub const BUY_EVENT_DATA_FIELDS: [&str; 5] =
-    ["buyer", "creator_id", "quantity", "price_paid", "ledger"];
+pub const BUY_EVENT_DATA_FIELDS: [&str; 6] = [
+    "buyer",
+    "creator_id",
+    "quantity",
+    "price_paid",
+    "new_supply",
+    "ledger",
+];
 
 /// Stable field order for sell event payloads.
 pub const SELL_EVENT_DATA_FIELDS: [&str; 5] =
@@ -151,6 +157,8 @@ pub struct KeysBoughtEvent {
     pub quantity: u32,
     /// Price paid for the keys (before fees).
     pub price_paid: i128,
+    /// Total supply of keys for this creator after the purchase.
+    pub new_supply: u32,
     /// Ledger sequence number at the time of the purchase.
     pub ledger: u32,
 }
