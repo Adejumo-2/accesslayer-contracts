@@ -141,7 +141,8 @@ fn test_views_report_unset_defaults_before_initialization() {
 }
 
 /// Repeating the full init sequence with identical values succeeds, mutates nothing,
-/// and emits CONTRACT_INITIALIZED exactly once across both passes.
+/// and emits CONTRACT_INITIALIZED exactly once across both passes. Note:
+/// `env.events().all()` drains the log, so each pass asserts its own event delta.
 #[test]
 fn test_repeated_initialization_is_idempotent_and_state_invariant() {
     let env = test_env_with_auths();
@@ -182,7 +183,7 @@ fn test_repeated_initialization_is_idempotent_and_state_invariant() {
     assert!(client.is_protocol_config_initialized());
     assert_eq!(
         count_initialization_events(&env),
-        1,
+        0,
         "the idempotent second pass must not emit another init event"
     );
 }
