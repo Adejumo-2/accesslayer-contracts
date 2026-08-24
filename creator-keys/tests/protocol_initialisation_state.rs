@@ -161,7 +161,7 @@ fn test_repeated_initialization_is_idempotent_and_state_invariant() {
             .map(|v| v.into_val(&env))
             .unwrap_or_else(|| Symbol::new(&env, "none"));
         eprintln!(
-            "DEBUG event[{i}] contract={contract} topic0={name:?} ntopics={}",
+            "DEBUG event[{i}] contract={contract:?} topic0={name:?} ntopics={}",
             topics.len()
         );
     }
