@@ -153,6 +153,16 @@ fn test_repeated_initialization_is_idempotent_and_state_invariant() {
 
     run_initialisation(&client, &admin, &treasury);
 
+    let log = env.events().all();
+    eprintln!("DEBUG total_events={}", log.len());
+    for (i, (contract, topics, _)) in log.iter().enumerate() {
+        let name: Symbol = topics
+            .get(events::TOPIC_EVENT_NAME_INDEX)
+            .map(|v| v.into_val(&env))
+            .unwrap_or_else(|| Symbol::new(&env, "none"));
+        eprintln!("DEBUG event[{i}] contract={contract} topic0={name:?} ntopics={}", topics.len());
+    }
+
     let admin_before = client.get_protocol_admin();
     let config_before = fee_config_bps(&client);
     let bps_before = client.get_protocol_fee_bps();
