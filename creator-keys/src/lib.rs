@@ -1681,6 +1681,8 @@ impl CreatorKeysContract {
                 holder_count: profile.holder_count,
                 creator_bps: fee_config.creator_bps,
                 protocol_bps: fee_config.protocol_bps,
+                fee_recipient: profile.fee_recipient.clone(),
+                registered_at_ledger: current_ledger,
             },
         );
 
