@@ -84,6 +84,8 @@ pub enum ContractError {
     WalletCapExceeded = 35,
     DiscountTierLimitExceeded = 36,
     WalletBlacklisted = 37,
+    SchemaVersionTooOld = 38,
+    SchemaVersionUnsupported = 39,
 }
 
 pub mod fee {
@@ -549,6 +551,39 @@ pub mod ttl {
     pub fn should_extend(current_ttl: u32, threshold: u32) -> bool {
         current_ttl < threshold
     }
+}
+
+/// Current client-facing schema version of this contract.
+///
+/// Increment this constant whenever the contract's ABI or on-chain data layout
+/// changes in a way that is incompatible with older clients.
+pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+
+/// Minimum schema version that clients must present.
+///
+/// Calls that supply a version strictly below this value are rejected with
+/// [`ContractError::SchemaVersionTooOld`] so stale clients are forced to
+/// upgrade before interacting with the contract.
+pub const MIN_SCHEMA_VERSION: u32 = 1;
+
+/// Schema version compatibility guard.
+///
+/// Pure function — no Soroban `Env` required — so it is easily unit-testable
+/// and reusable across any entrypoint that wants version gating.
+///
+/// # Rules
+/// - `client_version == 0`            → `SchemaVersionTooOld`
+/// - `client_version < MIN_SCHEMA_VERSION` → `SchemaVersionTooOld`
+/// - `client_version > CURRENT_SCHEMA_VERSION` → `SchemaVersionUnsupported`
+/// - otherwise                        → `Ok(())`
+pub fn assert_schema_version(client_version: u32) -> Result<(), ContractError> {
+    if client_version == 0 || client_version < MIN_SCHEMA_VERSION {
+        return Err(ContractError::SchemaVersionTooOld);
+    }
+    if client_version > CURRENT_SCHEMA_VERSION {
+        return Err(ContractError::SchemaVersionUnsupported);
+    }
+    Ok(())
 }
 
 pub const HANDLE_LEN_MIN: u32 = 3;
@@ -1866,6 +1901,24 @@ impl CreatorKeysContract {
         extend_creator_ttl(&env, &creator);
 
         Ok(profile.supply)
+    }
+
+    /// Validates that `client_schema_version` is compatible with this deployment.
+    ///
+    /// Returns `Ok(())` when the version matches the contract's current schema.
+    /// Returns an error when the client is too old or too new:
+    /// - [`ContractError::SchemaVersionTooOld`] — version is `0` or below the
+    ///   minimum supported version; the client must upgrade.
+    /// - [`ContractError::SchemaVersionUnsupported`] — version exceeds the
+    ///   current schema; this contract deployment does not understand it yet.
+    ///
+    /// No state is read or written; the check is pure and can be called without
+    /// authorization.
+    pub fn check_schema_version(
+        _env: Env,
+        client_schema_version: u32,
+    ) -> Result<(), ContractError> {
+        assert_schema_version(client_schema_version)
     }
 
     pub fn sell_key(
