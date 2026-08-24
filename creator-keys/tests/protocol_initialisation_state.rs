@@ -50,7 +50,10 @@ fn fee_config_bps(client: &CreatorKeysContractClient<'_>) -> Option<(u32, u32)> 
         .map(|config| (config.creator_bps, config.protocol_bps))
 }
 
-/// Counts `ContractInitializedEvent` records currently captured in the environment.
+/// Counts `ContractInitializedEvent` records emitted by the most recent contract
+/// invocation. `env.events().all()` exposes only the last invocation's events,
+/// not a cumulative log, so callers must invoke the contract call under test
+/// immediately before counting.
 fn count_initialization_events(env: &Env) -> usize {
     env.events()
         .all()
@@ -142,7 +145,8 @@ fn test_views_report_unset_defaults_before_initialization() {
 
 /// Repeating the full init sequence with identical values succeeds, mutates nothing,
 /// and emits CONTRACT_INITIALIZED exactly once across both passes. Note:
-/// `env.events().all()` drains the log, so each pass asserts its own event delta.
+/// `env.events().all()` only exposes the events of the most recent contract
+/// invocation, so each pass ends on its `set_fee_config` call before counting.
 #[test]
 fn test_repeated_initialization_is_idempotent_and_state_invariant() {
     let env = test_env_with_auths();
@@ -151,27 +155,24 @@ fn test_repeated_initialization_is_idempotent_and_state_invariant() {
     let admin = Address::generate(&env);
     let treasury = Address::generate(&env);
 
-    run_initialisation(&client, &admin, &treasury);
+    // Pass 1: fee config last so its initialization event is visible to all().
+    client.set_protocol_admin(&admin, &admin);
+    client.set_key_price(&admin, &KEY_PRICE);
+    client.set_treasury_address(&admin, &treasury);
+    client.set_fee_config(&admin, &CREATOR_BPS, &PROTOCOL_BPS);
 
-    let log = env.events().all();
-    eprintln!("DEBUG total_events={}", log.len());
-    for (i, (contract, topics, _)) in log.iter().enumerate() {
-        let name: Symbol = topics
-            .get(events::TOPIC_EVENT_NAME_INDEX)
-            .map(|v| v.into_val(&env))
-            .unwrap_or_else(|| Symbol::new(&env, "none"));
-        eprintln!(
-            "DEBUG event[{i}] contract={contract:?} topic0={name:?} ntopics={}",
-            topics.len()
-        );
-    }
+    assert_eq!(
+        count_initialization_events(&env),
+        1,
+        "first initialisation must emit exactly one ContractInitialized event"
+    );
 
     let admin_before = client.get_protocol_admin();
     let config_before = fee_config_bps(&client);
     let bps_before = client.get_protocol_fee_bps();
     let treasury_before = client.get_treasury_address();
-    assert_eq!(count_initialization_events(&env), 1);
 
+    // Pass 2: repeat every setter with identical values; each must succeed.
     assert_eq!(
         client.try_set_protocol_admin(&admin, &admin),
         Ok(Ok(())),
@@ -182,12 +183,12 @@ fn test_repeated_initialization_is_idempotent_and_state_invariant() {
         Ok(Ok(())),
         "re-setting the same key price must succeed"
     );
+    client.set_treasury_address(&admin, &treasury);
     assert_eq!(
         client.try_set_fee_config(&admin, &CREATOR_BPS, &PROTOCOL_BPS),
         Ok(Ok(())),
         "re-setting the same fee config must succeed"
     );
-    client.set_treasury_address(&admin, &treasury);
 
     assert_eq!(client.get_protocol_admin(), admin_before);
     assert_eq!(fee_config_bps(&client), config_before);
