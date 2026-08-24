@@ -279,6 +279,7 @@ fn test_register_creator_event_data_is_indexer_friendly() {
     let last = events.last().unwrap();
     let payload: events::CreatorRegisteredEvent = last.2.into_val(&env);
 
+    let creator_addr = fixture.creator.clone();
     let expected = CreatorRegisteredEventBuilder::new()
         .creator(fixture.creator)
         .handle(handle)
@@ -286,6 +287,8 @@ fn test_register_creator_event_data_is_indexer_friendly() {
         .holder_count(0)
         .creator_bps(0)
         .protocol_bps(0)
+        .fee_recipient(creator_addr)
+        .registered_at_ledger(env.ledger().sequence())
         .build();
 
     assert_eq!(payload, expected);
