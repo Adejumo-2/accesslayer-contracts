@@ -286,6 +286,7 @@ fn test_get_balance_wallet_bought_then_sold_all_keys_returns_zero_and_does_not_p
         &None,
         &None,
         &None,
+        &None,
     );
 
     // Buy 2 keys
