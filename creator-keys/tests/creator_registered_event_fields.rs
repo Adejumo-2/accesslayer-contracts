@@ -285,8 +285,7 @@ fn test_registered_at_ledger_reflects_registration_ledger_not_later_buy_ledger()
     // Capture the event immediately — event log is scoped to the current call
     let reg_payload = last_registration_event(&env);
     assert_eq!(
-        reg_payload.registered_at_ledger,
-        registration_ledger,
+        reg_payload.registered_at_ledger, registration_ledger,
         "registered_at_ledger must equal the ledger sequence at registration time"
     );
 
@@ -317,13 +316,11 @@ fn test_registered_at_ledger_reflects_registration_ledger_not_later_buy_ledger()
         .expect("buy event must be present after buy_key call");
 
     assert_eq!(
-        buy_payload.ledger,
-        buy_ledger,
+        buy_payload.ledger, buy_ledger,
         "buy event ledger must reflect the ledger at buy time"
     );
     assert_ne!(
-        buy_payload.ledger,
-        registration_ledger,
+        buy_payload.ledger, registration_ledger,
         "buy ledger and registration ledger must differ"
     );
 }
