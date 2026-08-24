@@ -19,7 +19,7 @@
 mod contract_test_env;
 
 use contract_test_env::{assert_storage_absent, register_creator_keys, test_env_with_auths};
-use creator_keys::{constants, events, fee, ContractError, CreatorKeysContractClient};
+use creator_keys::{constants, events, ContractError, CreatorKeysContractClient};
 use soroban_sdk::{
     testutils::{Address as _, Events},
     Address, Env, IntoVal, Symbol,
@@ -40,6 +40,14 @@ fn run_initialisation(client: &CreatorKeysContractClient<'_>, admin: &Address, t
     client.set_key_price(admin, &KEY_PRICE);
     client.set_fee_config(admin, &CREATOR_BPS, &PROTOCOL_BPS);
     client.set_treasury_address(admin, treasury);
+}
+
+/// Field-level view of the stored fee config. `FeeConfig` does not implement
+/// `Debug`, so assertions compare its bps fields as a tuple instead.
+fn fee_config_bps(client: &CreatorKeysContractClient<'_>) -> Option<(u32, u32)> {
+    client
+        .get_fee_config()
+        .map(|config| (config.creator_bps, config.protocol_bps))
 }
 
 /// Counts `ContractInitializedEvent` records currently captured in the environment.
@@ -72,11 +80,9 @@ fn test_full_initialization_sets_all_state_fields() {
 
     assert_eq!(client.get_protocol_admin(), Some(admin.clone()));
     assert_eq!(
-        client.get_fee_config(),
-        Some(fee::FeeConfig {
-            creator_bps: CREATOR_BPS,
-            protocol_bps: PROTOCOL_BPS,
-        })
+        fee_config_bps(&client),
+        Some((CREATOR_BPS, PROTOCOL_BPS)),
+        "fee config must store the initialised bps split"
     );
     assert_eq!(
         client.get_protocol_fee_bps(),
@@ -112,7 +118,7 @@ fn test_views_report_unset_defaults_before_initialization() {
     let (client, contract_id) = register_creator_keys(&env);
 
     assert_eq!(client.get_protocol_admin(), None);
-    assert_eq!(client.get_fee_config(), None);
+    assert_eq!(fee_config_bps(&client), None);
     assert_eq!(client.get_treasury_address(), None);
     assert!(!client.is_protocol_config_initialized());
 
@@ -147,7 +153,7 @@ fn test_repeated_initialization_is_idempotent_and_state_invariant() {
     run_initialisation(&client, &admin, &treasury);
 
     let admin_before = client.get_protocol_admin();
-    let config_before = client.get_fee_config();
+    let config_before = fee_config_bps(&client);
     let bps_before = client.get_protocol_fee_bps();
     let treasury_before = client.get_treasury_address();
     assert_eq!(count_initialization_events(&env), 1);
@@ -170,7 +176,7 @@ fn test_repeated_initialization_is_idempotent_and_state_invariant() {
     client.set_treasury_address(&admin, &treasury);
 
     assert_eq!(client.get_protocol_admin(), admin_before);
-    assert_eq!(client.get_fee_config(), config_before);
+    assert_eq!(fee_config_bps(&client), config_before);
     assert_eq!(client.get_protocol_fee_bps(), bps_before);
     assert_eq!(client.get_treasury_address(), treasury_before);
     assert!(client.is_protocol_config_initialized());
