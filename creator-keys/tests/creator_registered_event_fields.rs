@@ -196,11 +196,16 @@ fn test_no_creator_registered_event_emitted_on_duplicate_registration() {
     let (client, _) = register_creator_keys(&env);
 
     let creator = Address::generate(&env);
+
+    // First registration succeeds and emits exactly one event
     register_creator(&client, &env, &creator, "grace");
+    assert_eq!(
+        registration_event_count(&env),
+        1,
+        "successful registration must emit exactly one CreatorRegistered event"
+    );
 
-    let count_after_first = registration_event_count(&env);
-
-    // Attempt duplicate registration — should fail
+    // Duplicate registration must fail — event log resets per call
     let result = client.try_register_creator(
         &creator_keys::RegisterCreatorParams {
             creator: creator.clone(),
@@ -215,10 +220,11 @@ fn test_no_creator_registered_event_emitted_on_duplicate_registration() {
     );
     assert!(result.is_err(), "duplicate registration must fail");
 
-    let count_after_fail = registration_event_count(&env);
+    // After the failed call the event log reflects only that call — no registration event
     assert_eq!(
-        count_after_first, count_after_fail,
-        "no CreatorRegistered event must be emitted after a failed registration"
+        registration_event_count(&env),
+        0,
+        "no CreatorRegistered event must be emitted in a failed registration call"
     );
 }
 
@@ -263,10 +269,10 @@ fn test_creator_registered_event_registered_at_ledger_field_is_u32_type() {
     let _: u32 = payload.registered_at_ledger;
 }
 
-// ── AC4: registered_at_ledger matches get_total_key_supply ledger invariant ───
+// ── AC4: registered_at_ledger reflects the ledger at registration time ────────
 
 #[test]
-fn test_registered_at_ledger_is_stable_across_subsequent_buys() {
+fn test_registered_at_ledger_reflects_registration_ledger_not_later_buy_ledger() {
     let env = test_env_with_auths();
     let (client, _) = register_creator_keys(&env);
 
@@ -276,34 +282,48 @@ fn test_registered_at_ledger_is_stable_across_subsequent_buys() {
     let creator = Address::generate(&env);
     register_creator(&client, &env, &creator, "kevin");
 
-    let payload = last_registration_event(&env);
-    assert_eq!(payload.registered_at_ledger, registration_ledger);
+    // Capture the event immediately — event log is scoped to the current call
+    let reg_payload = last_registration_event(&env);
+    assert_eq!(
+        reg_payload.registered_at_ledger,
+        registration_ledger,
+        "registered_at_ledger must equal the ledger sequence at registration time"
+    );
 
-    // Advance ledger and perform a buy — registered_at_ledger in the original event unchanged
-    set_ledger_sequence(&env, registration_ledger + 10);
+    // Advance ledger and perform a buy in a separate call
+    let buy_ledger: u32 = registration_ledger + 10;
+    set_ledger_sequence(&env, buy_ledger);
     let admin = Address::generate(&env);
     client.set_key_price(&admin, &1_000);
-    let buyer = Address::generate(&env);
-    client.buy_key(&creator, &buyer, &1_000, &None);
+    client.buy_key(&creator, &Address::generate(&env), &1_000, &None);
 
-    // The registration event's ledger is still the original
-    let all_events = env.events().all();
-    let reg_event = all_events
+    // The buy event carries the advanced ledger, proving each event snapshots its
+    // own call's ledger independently of previous registrations
+    let buy_payload: events::KeysBoughtEvent = env
+        .events()
+        .all()
         .iter()
+        .rev()
         .find(|(_, topics, _)| {
             topics
                 .get(events::TOPIC_EVENT_NAME_INDEX)
                 .map(|v| {
                     let name: Symbol = v.into_val(&env);
-                    name == events::REGISTER_EVENT_NAME
+                    name == events::BUY_EVENT_NAME
                 })
                 .unwrap_or(false)
         })
-        .expect("registration event must still be in log");
+        .map(|(_, _, data)| data.into_val(&env))
+        .expect("buy event must be present after buy_key call");
 
-    let reg_payload: events::CreatorRegisteredEvent = reg_event.2.into_val(&env);
     assert_eq!(
-        reg_payload.registered_at_ledger, registration_ledger,
-        "registered_at_ledger in the original event must not change after subsequent buys"
+        buy_payload.ledger,
+        buy_ledger,
+        "buy event ledger must reflect the ledger at buy time"
+    );
+    assert_ne!(
+        buy_payload.ledger,
+        registration_ledger,
+        "buy ledger and registration ledger must differ"
     );
 }
