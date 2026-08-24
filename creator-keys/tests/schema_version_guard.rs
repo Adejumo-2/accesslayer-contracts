@@ -11,7 +11,7 @@ use creator_keys::{
     assert_schema_version, ContractError, CreatorKeysContract, CreatorKeysContractClient,
     CURRENT_SCHEMA_VERSION, MIN_SCHEMA_VERSION,
 };
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::Address as _, Address};
 
 // ---------------------------------------------------------------------------
 // Pure guard – no Soroban Env needed
@@ -85,13 +85,9 @@ fn contract_one_below_current_is_too_old() {
     let id = env.register(CreatorKeysContract, ());
     let client = CreatorKeysContractClient::new(&env, &id);
 
-    // When MIN_SCHEMA_VERSION == CURRENT_SCHEMA_VERSION == 1, version 0 is the
-    // one-below-current case and must be rejected with SchemaVersionTooOld.
-    let outdated = if CURRENT_SCHEMA_VERSION > 1 {
-        CURRENT_SCHEMA_VERSION - 1
-    } else {
-        0
-    };
+    // When CURRENT_SCHEMA_VERSION == 1, saturating_sub gives 0, which is the
+    // correct "one below current" value and must still be rejected as too old.
+    let outdated = CURRENT_SCHEMA_VERSION.saturating_sub(1);
 
     let result = client.try_check_schema_version(&outdated);
     assert_eq!(
