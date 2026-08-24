@@ -353,8 +353,7 @@ fn test_buy_key_event_payload_tracks_new_supply_across_purchases() {
     let first_payload = fixture.last_buy_payload(&env);
     assert_eq!(first_payload.price_paid, KEY_PRICE);
     assert_eq!(
-        first_payload.new_supply,
-        1,
+        first_payload.new_supply, 1,
         "first buy new_supply should be 1"
     );
 
@@ -362,8 +361,7 @@ fn test_buy_key_event_payload_tracks_new_supply_across_purchases() {
     let second_payload = fixture.last_buy_payload(&env);
     assert_eq!(second_payload.price_paid, KEY_PRICE);
     assert_eq!(
-        second_payload.new_supply,
-        2,
+        second_payload.new_supply, 2,
         "second buy new_supply should be 2"
     );
 }
