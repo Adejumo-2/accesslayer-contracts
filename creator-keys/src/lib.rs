@@ -314,6 +314,7 @@ pub mod constants {
         pub const PAUSED: DataKey = DataKey::Paused;
         pub const CURVE_SLOPE: DataKey = DataKey::CurveSlope;
         pub const TREASURY_BALANCE: DataKey = DataKey::TreasuryBalance;
+        pub const RETENTION_POLICY: DataKey = DataKey::RetentionPolicy;
 
         pub fn curve_preset(creator: &Address) -> DataKey {
             DataKey::CurvePreset(creator.clone())
@@ -611,6 +612,26 @@ pub enum CurvePreset {
     Flat = 2,
 }
 
+/// Archive partition strategy for retention management.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[contracttype]
+pub enum PartitionStrategy {
+    Daily = 0,
+    Weekly = 1,
+    Monthly = 2,
+    Ledger = 3,
+}
+
+/// Archive retention policy configuration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct RetentionPolicy {
+    pub retention_days: u32,
+    pub partition_strategy: PartitionStrategy,
+    pub compression_enabled: bool,
+    pub batch_size: u32,
+}
+
 /// Canonical storage key schema for persistent protocol state.
 ///
 /// For quote-related key usage and invariants, see
@@ -651,6 +672,8 @@ pub enum DataKey {
     /// Wallet addresses the protocol admin has barred from buying, selling,
     /// or registering as a creator.
     Blacklisted(Address),
+    /// Archive retention policy configuration.
+    RetentionPolicy,
 }
 
 /// Time-locked key allocation for creator self-vesting.
@@ -1153,6 +1176,38 @@ fn credit_treasury_balance(env: &Env, amount: i128) -> Result<(), ContractError>
         .persistent()
         .set(&constants::storage::TREASURY_BALANCE, &updated);
     Ok(())
+}
+
+/// Archive retention configuration module with canonical defaults.
+pub mod retention {
+    use super::PartitionStrategy;
+
+    /// Default retention window in days (30 days).
+    pub const DEFAULT_RETENTION_DAYS: u32 = 30;
+    /// Default partition strategy (Daily).
+    pub const DEFAULT_PARTITION_STRATEGY: PartitionStrategy = PartitionStrategy::Daily;
+    /// Default compression enabled flag (true).
+    pub const DEFAULT_COMPRESSION_ENABLED: bool = true;
+    /// Default batch size for archive processing (100).
+    pub const DEFAULT_BATCH_SIZE: u32 = 100;
+}
+
+/// Returns the canonical default [`RetentionPolicy`].
+pub fn default_retention_policy() -> RetentionPolicy {
+    RetentionPolicy {
+        retention_days: retention::DEFAULT_RETENTION_DAYS,
+        partition_strategy: retention::DEFAULT_PARTITION_STRATEGY,
+        compression_enabled: retention::DEFAULT_COMPRESSION_ENABLED,
+        batch_size: retention::DEFAULT_BATCH_SIZE,
+    }
+}
+
+/// Reads the current archive retention policy from storage, falling back to defaults.
+pub fn read_retention_policy(env: &Env) -> RetentionPolicy {
+    env.storage()
+        .persistent()
+        .get(&constants::storage::RETENTION_POLICY)
+        .unwrap_or_else(default_retention_policy)
 }
 
 fn assert_buy_price_slippage(price: i128, max_price: Option<i128>) -> Result<(), ContractError> {
@@ -2893,6 +2948,49 @@ impl CreatorKeysContract {
         }
 
         Ok(())
+    }
+
+    /// Sets the archive retention policy configuration.
+    ///
+    /// Only callable by an authorized admin.
+    ///
+    /// Parameter validation:
+    /// - `admin`: must authorize the call (`require_auth`).
+    /// - `batch_size`: must be strictly positive; returns [`ContractError::NotPositiveAmount`].
+    pub fn set_retention_policy(
+        env: Env,
+        admin: Address,
+        retention_days: u32,
+        partition_strategy: PartitionStrategy,
+        compression_enabled: bool,
+        batch_size: u32,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        assert_is_admin(&env, &admin)?;
+        if batch_size == 0 {
+            return Err(ContractError::NotPositiveAmount);
+        }
+
+        let policy = RetentionPolicy {
+            retention_days,
+            partition_strategy,
+            compression_enabled,
+            batch_size,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&constants::storage::RETENTION_POLICY, &policy);
+
+        Ok(())
+    }
+
+    /// Read-only view: returns the current archive retention configuration.
+    ///
+    /// Returns the configured [`RetentionPolicy`] or canonical defaults if unset.
+    /// Does not mutate contract state or panic when uninitialized.
+    pub fn get_retention_policy(env: Env) -> RetentionPolicy {
+        read_retention_policy(&env)
     }
 
     /// Read-only view: returns whether protocol configuration has been initialized.
@@ -4731,6 +4829,53 @@ mod tests {
 
         let bps = env.as_contract(&contract_id, || super::read_protocol_fee_bps(&env));
         assert_eq!(bps, 1000, "must return stored protocol_fee_bps");
+    }
+
+    // --- retention policy unit tests (#724) ---
+
+    #[test]
+    fn test_read_retention_policy_returns_default_when_unset() {
+        let env = Env::default();
+        let contract_id = env.register(super::CreatorKeysContract, ());
+
+        let policy = env.as_contract(&contract_id, || super::read_retention_policy(&env));
+        assert_eq!(
+            policy.retention_days,
+            super::retention::DEFAULT_RETENTION_DAYS
+        );
+        assert_eq!(
+            policy.partition_strategy,
+            super::retention::DEFAULT_PARTITION_STRATEGY
+        );
+        assert_eq!(
+            policy.compression_enabled,
+            super::retention::DEFAULT_COMPRESSION_ENABLED
+        );
+        assert_eq!(policy.batch_size, super::retention::DEFAULT_BATCH_SIZE);
+    }
+
+    #[test]
+    fn test_get_retention_policy_view_returns_configured_values() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(super::CreatorKeysContract, ());
+        let client = super::CreatorKeysContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+
+        client.set_protocol_admin(&admin, &admin);
+        client.set_retention_policy(
+            &admin,
+            &90u32,
+            &super::PartitionStrategy::Monthly,
+            &false,
+            &500u32,
+        );
+
+        let policy = client.get_retention_policy();
+        assert_eq!(policy.retention_days, 90);
+        assert_eq!(policy.partition_strategy, super::PartitionStrategy::Monthly);
+        assert!(!policy.compression_enabled);
+        assert_eq!(policy.batch_size, 500);
     }
 }
 
