@@ -160,7 +160,10 @@ fn test_repeated_initialization_is_idempotent_and_state_invariant() {
             .get(events::TOPIC_EVENT_NAME_INDEX)
             .map(|v| v.into_val(&env))
             .unwrap_or_else(|| Symbol::new(&env, "none"));
-        eprintln!("DEBUG event[{i}] contract={contract} topic0={name:?} ntopics={}", topics.len());
+        eprintln!(
+            "DEBUG event[{i}] contract={contract} topic0={name:?} ntopics={}",
+            topics.len()
+        );
     }
 
     let admin_before = client.get_protocol_admin();
