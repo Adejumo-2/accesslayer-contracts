@@ -40,6 +40,9 @@ pub const BLACKLIST_ADDED_EVENT_NAME: Symbol = symbol_short!("blk_add");
 /// Event name for a wallet being removed from the admin blacklist.
 pub const BLACKLIST_REMOVED_EVENT_NAME: Symbol = symbol_short!("blk_rem");
 
+/// Event name for the protocol-wide buy deadline ledger being set or cleared.
+pub const GLOBAL_DEADLINE_SET_EVENT_NAME: Symbol = symbol_short!("dl_set");
+
 /// Event name for creator registration.
 pub const REGISTER_EVENT_NAME: Symbol = symbol_short!("register");
 
