@@ -86,6 +86,7 @@ pub enum ContractError {
     WalletBlacklisted = 37,
     SchemaVersionTooOld = 38,
     SchemaVersionUnsupported = 39,
+    DisplayNameEmpty = 40,
 }
 
 pub mod fee {
@@ -1035,21 +1036,31 @@ fn is_valid_handle_byte(byte: u8) -> bool {
     byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'
 }
 
+/// Validates a creator's display handle.
+///
+/// A blank handle — empty, or nothing but ASCII whitespace — is reported as
+/// [`ContractError::DisplayNameEmpty`] ahead of the length and character rules,
+/// so a caller that simply omitted the field gets that back rather than the
+/// generic "too short". The over-length check runs first because the handle
+/// bytes are read into a fixed `HANDLE_LEN_MAX` buffer.
 fn validate_creator_handle(handle: &String) -> Result<(), ContractError> {
     let len = handle.len();
-    if len < HANDLE_LEN_MIN {
-        return Err(ContractError::HandleTooShort);
-    }
     if len > HANDLE_LEN_MAX {
         return Err(ContractError::HandleTooLong);
     }
 
     let mut bytes = [0u8; HANDLE_LEN_MAX as usize];
     handle.copy_into_slice(&mut bytes[..len as usize]);
-    if bytes[..len as usize]
-        .iter()
-        .any(|byte| !is_valid_handle_byte(*byte))
-    {
+    let handle_bytes = &bytes[..len as usize];
+
+    // An empty slice satisfies `all`, so this covers the empty-string case too.
+    if handle_bytes.iter().all(|byte| byte.is_ascii_whitespace()) {
+        return Err(ContractError::DisplayNameEmpty);
+    }
+    if len < HANDLE_LEN_MIN {
+        return Err(ContractError::HandleTooShort);
+    }
+    if handle_bytes.iter().any(|byte| !is_valid_handle_byte(*byte)) {
         return Err(ContractError::InvalidHandleCharacter);
     }
 
@@ -1608,10 +1619,11 @@ impl CreatorKeysContract {
     /// - `creator`: must authorize the call (`require_auth`). A profile must not
     ///   already exist for this address, otherwise
     ///   [`ContractError::AlreadyRegistered`].
-    /// - `handle`: validated by [`validate_creator_handle`] — below the minimum
-    ///   length returns [`ContractError::HandleTooShort`], above the maximum
-    ///   returns [`ContractError::HandleTooLong`], and any disallowed byte
-    ///   returns [`ContractError::InvalidHandleCharacter`].
+    /// - `handle`: validated by [`validate_creator_handle`] — a blank handle
+    ///   (empty or whitespace-only) returns [`ContractError::DisplayNameEmpty`],
+    ///   below the minimum length returns [`ContractError::HandleTooShort`],
+    ///   above the maximum returns [`ContractError::HandleTooLong`], and any
+    ///   disallowed byte returns [`ContractError::InvalidHandleCharacter`].
     /// - `locked_allocation`: optional time-locked key allocation for creator self-vesting.
     ///   If provided, `unlock_ledger` must be strictly greater than current ledger.
     /// - `max_supply`: optional maximum supply cap. If provided, must be greater than zero.
