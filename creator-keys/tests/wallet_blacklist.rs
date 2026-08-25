@@ -298,6 +298,7 @@ fn test_blacklist_does_not_affect_other_wallets() {
     let supply = client.buy_key(&creator, &allowed_buyer, &100, &None);
     assert_eq!(supply, 1);
     assert_eq!(client.get_key_balance(&creator, &allowed_buyer), 1);
+}
 
 // ---------------------------------------------------------------------------
 // is_wallet_blacklisted view returns correct status
