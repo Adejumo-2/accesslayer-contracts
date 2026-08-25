@@ -86,6 +86,7 @@ pub enum ContractError {
     WalletBlacklisted = 37,
     SchemaVersionTooOld = 38,
     SchemaVersionUnsupported = 39,
+    DeadlinePassed = 40,
 }
 
 pub mod fee {
@@ -315,6 +316,7 @@ pub mod constants {
         pub const CURVE_SLOPE: DataKey = DataKey::CurveSlope;
         pub const TREASURY_BALANCE: DataKey = DataKey::TreasuryBalance;
         pub const RETENTION_POLICY: DataKey = DataKey::RetentionPolicy;
+        pub const GLOBAL_DEADLINE_LEDGER: DataKey = DataKey::GlobalDeadlineLedger;
 
         pub fn curve_preset(creator: &Address) -> DataKey {
             DataKey::CurvePreset(creator.clone())
@@ -674,6 +676,9 @@ pub enum DataKey {
     Blacklisted(Address),
     /// Archive retention policy configuration.
     RetentionPolicy,
+    /// Protocol-wide ledger sequence at (and after) which buys are rejected.
+    /// Absent means no deadline is configured and buys are never time-gated.
+    GlobalDeadlineLedger,
 }
 
 /// Time-locked key allocation for creator self-vesting.
@@ -1080,6 +1085,27 @@ fn is_blacklisted(env: &Env, wallet: &Address) -> bool {
 fn assert_not_blacklisted(env: &Env, wallet: &Address) -> Result<(), ContractError> {
     if is_blacklisted(env, wallet) {
         return Err(ContractError::WalletBlacklisted);
+    }
+    Ok(())
+}
+
+/// Reads the protocol-wide buy deadline ledger, if one has been configured.
+fn read_global_deadline(env: &Env) -> Option<u32> {
+    env.storage()
+        .persistent()
+        .get::<DataKey, u32>(&constants::storage::GLOBAL_DEADLINE_LEDGER)
+}
+
+/// Rejects the call once the configured global deadline ledger has been reached.
+///
+/// The deadline is exclusive: the last ledger on which a buy is accepted is
+/// `deadline - 1`, so a buy submitted *at* the deadline is already too late.
+/// With no deadline configured the check is a no-op.
+fn assert_before_global_deadline(env: &Env) -> Result<(), ContractError> {
+    if let Some(deadline) = read_global_deadline(env) {
+        if env.ledger().sequence() >= deadline {
+            return Err(ContractError::DeadlinePassed);
+        }
     }
     Ok(())
 }
@@ -1800,6 +1826,7 @@ impl CreatorKeysContract {
         buyer.require_auth();
         assert_not_paused(&env)?;
         assert_not_blacklisted(&env, &buyer)?;
+        assert_before_global_deadline(&env)?;
 
         if payment <= 0 {
             return Err(ContractError::NotPositiveAmount);
@@ -2365,6 +2392,45 @@ impl CreatorKeysContract {
     /// Read-only view: returns whether the protocol is currently paused.
     pub fn get_is_paused(env: Env) -> bool {
         is_paused(&env)
+    }
+
+    /// Sets the protocol-wide deadline ledger after which buys are rejected.
+    ///
+    /// Only the protocol admin may call this. The deadline is exclusive: buys
+    /// are accepted while `ledger < deadline_ledger` and rejected with
+    /// [`ContractError::DeadlinePassed`] from `deadline_ledger` onwards. Passing
+    /// `None` clears the deadline and reopens buying indefinitely.
+    ///
+    /// Emits a `dl_set` event carrying the admin and the new deadline.
+    pub fn set_global_deadline(
+        env: Env,
+        admin: Address,
+        deadline_ledger: Option<u32>,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        assert_is_admin(&env, &admin)?;
+
+        match deadline_ledger {
+            Some(deadline) => env
+                .storage()
+                .persistent()
+                .set(&constants::storage::GLOBAL_DEADLINE_LEDGER, &deadline),
+            None => env
+                .storage()
+                .persistent()
+                .remove(&constants::storage::GLOBAL_DEADLINE_LEDGER),
+        }
+
+        env.events().publish(
+            (events::GLOBAL_DEADLINE_SET_EVENT_NAME, admin),
+            deadline_ledger,
+        );
+        Ok(())
+    }
+
+    /// Read-only view: returns the configured global deadline ledger, if any.
+    pub fn get_global_deadline(env: Env) -> Option<u32> {
+        read_global_deadline(&env)
     }
 
     /// Blocks a wallet from buying, selling, or registering as a creator.
