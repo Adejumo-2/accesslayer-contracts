@@ -338,4 +338,3 @@ fn test_is_wallet_blacklisted_returns_false_after_removal() {
     client.remove_from_blacklist(&admin, &wallet);
     assert!(!client.is_wallet_blacklisted(&wallet));
 }
-
