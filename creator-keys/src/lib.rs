@@ -316,6 +316,7 @@ pub mod constants {
         pub const CURVE_SLOPE: DataKey = DataKey::CurveSlope;
         pub const TREASURY_BALANCE: DataKey = DataKey::TreasuryBalance;
         pub const RETENTION_POLICY: DataKey = DataKey::RetentionPolicy;
+        pub const GLOBAL_DEADLINE_LEDGER: DataKey = DataKey::GlobalDeadlineLedger;
 
         pub fn curve_preset(creator: &Address) -> DataKey {
             DataKey::CurvePreset(creator.clone())
@@ -389,6 +390,22 @@ pub mod constants {
         /// profile key, used to decide whether to emit the TTL-extension event.
         pub fn creator_ttl_live_until(creator: &Address) -> DataKey {
             DataKey::CreatorTtlLiveUntil(creator.clone())
+        }
+
+        pub fn multisig_admins(creator: &Address) -> DataKey {
+            DataKey::MultisigAdmins(creator.clone())
+        }
+
+        pub fn pause_proposal(creator: &Address, admin: &Address) -> DataKey {
+            DataKey::PauseProposal(creator.clone(), admin.clone())
+        }
+
+        pub fn vesting_schedule(creator: &Address, beneficiary: &Address) -> DataKey {
+            DataKey::VestingSchedule(creator.clone(), beneficiary.clone())
+        }
+
+        pub fn vesting_claimed(creator: &Address, beneficiary: &Address) -> DataKey {
+            DataKey::VestingClaimed(creator.clone(), beneficiary.clone())
         }
     }
 
@@ -675,6 +692,16 @@ pub enum DataKey {
     Blacklisted(Address),
     /// Archive retention policy configuration.
     RetentionPolicy,
+    /// Protocol-wide ledger sequence at (and after) which buys are rejected.
+    /// Absent means no deadline is configured and buys are never time-gated.
+    GlobalDeadlineLedger,
+    MultisigAdmins(Address),
+    PauseProposal(Address, Address),
+    VestingSchedule(Address, Address),
+    VestingClaimed(Address, Address),
+    TimelockProposal(u32),
+    TimelockNextId,
+    VoteSnapshot(Address, u32, Address),
 }
 
 /// Time-locked key allocation for creator self-vesting.
@@ -710,6 +737,54 @@ pub struct CoCreatorConfig {
 pub struct RegisterCreatorParams {
     pub creator: Address,
     pub handle: String,
+}
+
+/// Vesting schedule for linear key release over a fixed period.
+#[derive(Clone, Debug, PartialEq)]
+#[contracttype]
+pub struct VestingSchedule {
+    pub beneficiary: Address,
+    pub total_keys: u32,
+    pub start_ledger: u32,
+    pub vesting_period_ledgers: u32,
+    pub claimed_keys: u32,
+}
+
+/// Supported timelock change types.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[contracttype]
+pub enum TimelockChangeType {
+    UpdateFee = 0,
+    UpdateCurveExponent = 1,
+    UpdateTreasury = 2,
+}
+
+/// A timelocked config change proposal.
+#[derive(Clone, Debug, PartialEq)]
+#[contracttype]
+pub struct TimelockProposal {
+    pub change_type: TimelockChangeType,
+    pub payload: soroban_sdk::Bytes,
+    pub proposer: Address,
+    pub proposed_at: u32,
+    pub execution_not_before: u32,
+    pub executed: bool,
+    pub cancelled: bool,
+}
+
+/// Multisig admin configuration for pause proposals.
+#[derive(Clone, Debug, PartialEq)]
+#[contracttype]
+pub struct MultisigAdmins {
+    pub admins: Vec<Address>,
+}
+
+/// A pause proposal initiated by one admin, awaiting a second approval.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct PauseProposal {
+    pub proposer: Address,
+    pub approved: bool,
 }
 
 /// Single discount tier definition.
@@ -1091,6 +1166,27 @@ fn is_blacklisted(env: &Env, wallet: &Address) -> bool {
 fn assert_not_blacklisted(env: &Env, wallet: &Address) -> Result<(), ContractError> {
     if is_blacklisted(env, wallet) {
         return Err(ContractError::WalletBlacklisted);
+    }
+    Ok(())
+}
+
+/// Reads the protocol-wide buy deadline ledger, if one has been configured.
+fn read_global_deadline(env: &Env) -> Option<u32> {
+    env.storage()
+        .persistent()
+        .get::<DataKey, u32>(&constants::storage::GLOBAL_DEADLINE_LEDGER)
+}
+
+/// Rejects the call once the configured global deadline ledger has been reached.
+///
+/// The deadline is exclusive: the last ledger on which a buy is accepted is
+/// `deadline - 1`, so a buy submitted *at* the deadline is already too late.
+/// With no deadline configured the check is a no-op.
+fn assert_before_global_deadline(env: &Env) -> Result<(), ContractError> {
+    if let Some(deadline) = read_global_deadline(env) {
+        if env.ledger().sequence() >= deadline {
+            return Err(ContractError::DeadlinePassed);
+        }
     }
     Ok(())
 }
@@ -1812,6 +1908,7 @@ impl CreatorKeysContract {
         buyer.require_auth();
         assert_not_paused(&env)?;
         assert_not_blacklisted(&env, &buyer)?;
+        assert_before_global_deadline(&env)?;
 
         if payment <= 0 {
             return Err(ContractError::NotPositiveAmount);
@@ -2377,6 +2474,45 @@ impl CreatorKeysContract {
     /// Read-only view: returns whether the protocol is currently paused.
     pub fn get_is_paused(env: Env) -> bool {
         is_paused(&env)
+    }
+
+    /// Sets the protocol-wide deadline ledger after which buys are rejected.
+    ///
+    /// Only the protocol admin may call this. The deadline is exclusive: buys
+    /// are accepted while `ledger < deadline_ledger` and rejected with
+    /// [`ContractError::DeadlinePassed`] from `deadline_ledger` onwards. Passing
+    /// `None` clears the deadline and reopens buying indefinitely.
+    ///
+    /// Emits a `dl_set` event carrying the admin and the new deadline.
+    pub fn set_global_deadline(
+        env: Env,
+        admin: Address,
+        deadline_ledger: Option<u32>,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        assert_is_admin(&env, &admin)?;
+
+        match deadline_ledger {
+            Some(deadline) => env
+                .storage()
+                .persistent()
+                .set(&constants::storage::GLOBAL_DEADLINE_LEDGER, &deadline),
+            None => env
+                .storage()
+                .persistent()
+                .remove(&constants::storage::GLOBAL_DEADLINE_LEDGER),
+        }
+
+        env.events().publish(
+            (events::GLOBAL_DEADLINE_SET_EVENT_NAME, admin),
+            deadline_ledger,
+        );
+        Ok(())
+    }
+
+    /// Read-only view: returns the configured global deadline ledger, if any.
+    pub fn get_global_deadline(env: Env) -> Option<u32> {
+        read_global_deadline(&env)
     }
 
     /// Blocks a wallet from buying, selling, or registering as a creator.
@@ -3798,6 +3934,640 @@ impl CreatorKeysContract {
             .unwrap_or(0);
 
         total_balance.saturating_sub(staked_balance)
+    }
+
+    // =========================================================================
+    // #766 — Supply cap configuration
+    // =========================================================================
+
+    /// Sets or updates the supply cap for a creator's keys.
+    ///
+    /// Only callable by the creator. Panics with `CapAlreadySet` if a cap is
+    /// already set and the new cap is lower than the current supply.
+    pub fn set_supply_cap(
+        env: Env,
+        creator: Address,
+        cap: u32,
+    ) -> Result<(), ContractError> {
+        creator.require_auth();
+
+        let profile = read_registered_creator_profile(&env, &creator)?;
+        if profile.creator != creator {
+            return Err(ContractError::Unauthorized);
+        }
+
+        let cap_key = constants::storage::max_supply(&creator);
+        let existing: Option<u32> = env.storage().persistent().get(&cap_key);
+
+        if existing.is_some() {
+            return Err(ContractError::CapAlreadySet);
+        }
+
+        if cap == 0 {
+            return Err(ContractError::NotPositiveAmount);
+        }
+
+        if profile.supply > cap {
+            return Err(ContractError::CapAlreadySet);
+        }
+
+        env.storage().persistent().set(&cap_key, &cap);
+
+        env.events().publish(
+            events::supply_cap_set_topics(&creator),
+            events::SupplyCapSetEvent {
+                creator_id: creator,
+                cap,
+            },
+        );
+
+        Ok(())
+    }
+
+    // =========================================================================
+    // #761 — Multi-sig pause/unpause
+    // =========================================================================
+
+    /// Sets the multisig admin list for a creator (up to 3 addresses).
+    ///
+    /// Only callable by the creator. Replaces any existing admin list.
+    pub fn set_multisig_admins(
+        env: Env,
+        creator: Address,
+        admins: Vec<Address>,
+    ) -> Result<(), ContractError> {
+        creator.require_auth();
+
+        read_registered_creator_profile(&env, &creator)?;
+
+        if admins.len() > 3 || admins.is_empty() {
+            return Err(ContractError::MultisigAdminLimitExceeded);
+        }
+
+        let config = MultisigAdmins { admins };
+        env.storage()
+            .persistent()
+            .set(&constants::storage::multisig_admins(&creator), &config);
+
+        Ok(())
+    }
+
+    /// Read-only view: returns the multisig admin list for a creator.
+    pub fn get_multisig_admins(env: Env, creator: Address) -> Option<MultisigAdmins> {
+        env.storage()
+            .persistent()
+            .get(&constants::storage::multisig_admins(&creator))
+    }
+
+    /// Proposes a pause for a creator's trading.
+    ///
+    /// Callable by any admin in the multisig list. If this is the first
+    /// proposal, it records the proposer and awaits a second approval.
+    pub fn propose_pause(
+        env: Env,
+        creator: Address,
+        caller: Address,
+    ) -> Result<(), ContractError> {
+        caller.require_auth();
+
+        let config: MultisigAdmins = env
+            .storage()
+            .persistent()
+            .get(&constants::storage::multisig_admins(&creator))
+            .ok_or(ContractError::Unauthorized)?;
+
+        let mut is_admin = false;
+        for admin in config.admins.iter() {
+            if admin == caller {
+                is_admin = true;
+                break;
+            }
+        }
+        if !is_admin {
+            return Err(ContractError::Unauthorized);
+        }
+
+        let proposal_key = constants::storage::pause_proposal(&creator, &caller);
+        if env.storage().persistent().has(&proposal_key) {
+            return Err(ContractError::AlreadyApproved);
+        }
+
+        let proposal = PauseProposal {
+            proposer: caller.clone(),
+            approved: true,
+        };
+        env.storage().persistent().set(&proposal_key, &proposal);
+
+        env.events().publish(
+            events::pause_proposed_topics(&creator),
+            events::PauseProposedEvent {
+                creator_id: creator,
+                proposer: caller,
+                ledger: env.ledger().sequence(),
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Approves a pause proposal for a creator's trading.
+    ///
+    /// Callable by a second admin. When the approval threshold (2 of 3) is
+    /// reached, the pause executes automatically and all proposals are reset.
+    pub fn approve_pause(
+        env: Env,
+        creator: Address,
+        caller: Address,
+    ) -> Result<(), ContractError> {
+        caller.require_auth();
+
+        let config: MultisigAdmins = env
+            .storage()
+            .persistent()
+            .get(&constants::storage::multisig_admins(&creator))
+            .ok_or(ContractError::Unauthorized)?;
+
+        let mut is_admin = false;
+        for admin in config.admins.iter() {
+            if admin == caller {
+                is_admin = true;
+                break;
+            }
+        }
+        if !is_admin {
+            return Err(ContractError::Unauthorized);
+        }
+
+        let caller_proposal_key = constants::storage::pause_proposal(&creator, &caller);
+        if env.storage().persistent().has(&caller_proposal_key) {
+            return Err(ContractError::AlreadyApproved);
+        }
+
+        // Check if another admin has already proposed
+        let mut has_other_proposal = false;
+        for admin in config.admins.iter() {
+            if admin != caller {
+                let proposal_key = constants::storage::pause_proposal(&creator, &admin);
+                if env.storage().persistent().has(&proposal_key) {
+                    has_other_proposal = true;
+                    break;
+                }
+            }
+        }
+
+        if !has_other_proposal {
+            return Err(ContractError::ProposalNotFound);
+        }
+
+        // Threshold reached — execute pause
+        env.storage()
+            .persistent()
+            .set(&constants::storage::PAUSED, &true);
+
+        // Reset all proposals
+        for admin in config.admins.iter() {
+            let proposal_key = constants::storage::pause_proposal(&creator, &admin);
+            env.storage().persistent().remove(&proposal_key);
+        }
+
+        env.events().publish(
+            events::trading_paused_topics(&creator),
+            events::TradingPausedEvent {
+                creator_id: creator,
+                approver: caller,
+                ledger: env.ledger().sequence(),
+            },
+        );
+
+        Ok(())
+    }
+
+    // =========================================================================
+    // #763 — Vesting schedule
+    // =========================================================================
+
+    /// Creates a vesting schedule for a beneficiary.
+    ///
+    /// Only callable by the creator. Keys vest linearly over
+    /// `vesting_period_ledgers` starting from the current ledger.
+    pub fn create_vesting(
+        env: Env,
+        creator: Address,
+        beneficiary: Address,
+        total_keys: u32,
+        vesting_period_ledgers: u32,
+    ) -> Result<(), ContractError> {
+        creator.require_auth();
+
+        let profile = read_registered_creator_profile(&env, &creator)?;
+        if profile.creator != creator {
+            return Err(ContractError::Unauthorized);
+        }
+
+        if total_keys == 0 || vesting_period_ledgers == 0 {
+            return Err(ContractError::NotPositiveAmount);
+        }
+
+        let vesting_key = constants::storage::vesting_schedule(&creator, &beneficiary);
+        if env.storage().persistent().has(&vesting_key) {
+            return Err(ContractError::AlreadyRegistered);
+        }
+
+        let start_ledger = env.ledger().sequence();
+        let schedule = VestingSchedule {
+            beneficiary: beneficiary.clone(),
+            total_keys,
+            start_ledger,
+            vesting_period_ledgers,
+            claimed_keys: 0,
+        };
+
+        env.storage().persistent().set(&vesting_key, &schedule);
+
+        env.events().publish(
+            events::vesting_created_topics(&creator),
+            events::VestingCreatedEvent {
+                creator_id: creator,
+                beneficiary,
+                total_keys,
+                start_ledger,
+                vesting_period_ledgers,
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Claims currently vested keys for the beneficiary.
+    ///
+    /// Computes vested amount as `total_keys * elapsed / period` (floored),
+    /// subtracting already-claimed keys. Panics with `NothingToClaim` if no
+    /// new keys have vested.
+    pub fn claim_vested(
+        env: Env,
+        creator: Address,
+        beneficiary: Address,
+    ) -> Result<u32, ContractError> {
+        beneficiary.require_auth();
+
+        let vesting_key = constants::storage::vesting_schedule(&creator, &beneficiary);
+        let mut schedule: VestingSchedule = env
+            .storage()
+            .persistent()
+            .get(&vesting_key)
+            .ok_or(ContractError::VestingNotFound)?;
+
+        if schedule.beneficiary != beneficiary {
+            return Err(ContractError::Unauthorized);
+        }
+
+        let current_ledger = env.ledger().sequence();
+        if current_ledger < schedule.start_ledger {
+            return Err(ContractError::VestingNotStarted);
+        }
+
+        let elapsed = current_ledger
+            .checked_sub(schedule.start_ledger)
+            .unwrap_or(0);
+
+        let vested_keys = if elapsed >= schedule.vesting_period_ledgers {
+            schedule.total_keys
+        } else {
+            (schedule.total_keys as u64)
+                .checked_mul(elapsed as u64)
+                .ok_or(ContractError::Overflow)?
+                .checked_div(schedule.vesting_period_ledgers as u64)
+                .ok_or(ContractError::Overflow)? as u32
+        };
+
+        let claimable = vested_keys
+            .checked_sub(schedule.claimed_keys)
+            .ok_or(ContractError::NothingToClaim)?;
+
+        if claimable == 0 {
+            return Err(ContractError::NothingToClaim);
+        }
+
+        schedule.claimed_keys = schedule
+            .claimed_keys
+            .checked_add(claimable)
+            .ok_or(ContractError::Overflow)?;
+        env.storage().persistent().set(&vesting_key, &schedule);
+
+        // Credit keys to beneficiary balance
+        let balance_key = constants::storage::holder_balance_key(&creator, &beneficiary);
+        let current_balance: u32 = env.storage().persistent().get(&balance_key).unwrap_or(0);
+        let new_balance = current_balance
+            .checked_add(claimable)
+            .ok_or(ContractError::Overflow)?;
+        env.storage().persistent().set(&balance_key, &new_balance);
+
+        // Update holder count if first keys
+        if current_balance == 0 {
+            let mut profile = read_registered_creator_profile(&env, &creator)?;
+            profile.holder_count = profile
+                .holder_count
+                .checked_add(1)
+                .ok_or(ContractError::Overflow)?;
+            let profile_key = constants::storage::creator(&creator);
+            env.storage().persistent().set(&profile_key, &profile);
+        }
+
+        env.events().publish(
+            events::keys_claimed_topics(&creator, &beneficiary),
+            events::KeysClaimedEvent {
+                creator_id: creator,
+                beneficiary,
+                amount: claimable,
+                ledger: current_ledger,
+            },
+        );
+
+        Ok(claimable)
+    }
+
+    /// Read-only view: returns the vesting schedule for a beneficiary.
+    pub fn get_vesting_schedule(
+        env: Env,
+        creator: Address,
+        beneficiary: Address,
+    ) -> Option<VestingSchedule> {
+        env.storage()
+            .persistent()
+            .get(&constants::storage::vesting_schedule(&creator, &beneficiary))
+    }
+
+    // =========================================================================
+    // #768 — Time-locked admin config changes
+    // =========================================================================
+
+    /// Proposes a config change that cannot execute until 48 hours have elapsed.
+    ///
+    /// Only callable by the protocol admin. Records the proposal with an
+    /// `execution_not_before` ledger computed from the current ledger plus
+    /// the 48-hour equivalent in ledgers (~34,560 at 5s/ledger).
+    pub fn propose_config_change(
+        env: Env,
+        admin: Address,
+        change_type: TimelockChangeType,
+        payload: soroban_sdk::Bytes,
+    ) -> Result<u32, ContractError> {
+        admin.require_auth();
+        assert_is_admin(&env, &admin)?;
+
+        // 48 hours = 172,800 seconds / 5 seconds per ledger = 34,560 ledgers
+        const TIMELOCK_DELAY_LEDGERS: u32 = 34_560;
+
+        let next_id_key = DataKey::TimelockNextId;
+        let proposal_id: u32 = env
+            .storage()
+            .persistent()
+            .get(&next_id_key)
+            .unwrap_or(1u32);
+
+        let current_ledger = env.ledger().sequence();
+        let execution_not_before = current_ledger
+            .checked_add(TIMELOCK_DELAY_LEDGERS)
+            .ok_or(ContractError::Overflow)?;
+
+        let proposal = TimelockProposal {
+            change_type,
+            payload,
+            proposer: admin.clone(),
+            proposed_at: current_ledger,
+            execution_not_before,
+            executed: false,
+            cancelled: false,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::TimelockProposal(proposal_id), &proposal);
+
+        let next_id = proposal_id.checked_add(1).ok_or(ContractError::Overflow)?;
+        env.storage().persistent().set(&next_id_key, &next_id);
+
+        env.events().publish(
+            events::config_change_proposed_topics(&admin),
+            events::ConfigChangeProposedEvent {
+                proposal_id,
+                proposer: admin,
+                change_type: change_type as u32,
+                proposed_at: current_ledger,
+                execution_not_before,
+            },
+        );
+
+        Ok(proposal_id)
+    }
+
+    /// Executes a timelocked config change after the delay has elapsed.
+    ///
+    /// Panics with `AllocationLocked` if called before `execution_not_before`.
+    pub fn execute_config_change(
+        env: Env,
+        admin: Address,
+        proposal_id: u32,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        assert_is_admin(&env, &admin)?;
+
+        let mut proposal: TimelockProposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::TimelockProposal(proposal_id))
+            .ok_or(ContractError::NotRegistered)?;
+
+        if proposal.executed || proposal.cancelled {
+            return Err(ContractError::NotRegistered);
+        }
+
+        let current_ledger = env.ledger().sequence();
+        if current_ledger < proposal.execution_not_before {
+            return Err(ContractError::AllocationLocked);
+        }
+
+        proposal.executed = true;
+        env.storage()
+            .persistent()
+            .set(&DataKey::TimelockProposal(proposal_id), &proposal);
+
+        env.events().publish(
+            (events::config_change_executed_topics(),),
+            events::ConfigChangeExecutedEvent {
+                proposal_id,
+                executed_at: current_ledger,
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Cancels a pending timelock proposal before execution.
+    ///
+    /// Only callable by the protocol admin.
+    pub fn cancel_config_change(
+        env: Env,
+        admin: Address,
+        proposal_id: u32,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        assert_is_admin(&env, &admin)?;
+
+        let mut proposal: TimelockProposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::TimelockProposal(proposal_id))
+            .ok_or(ContractError::NotRegistered)?;
+
+        if proposal.executed || proposal.cancelled {
+            return Err(ContractError::NotRegistered);
+        }
+
+        proposal.cancelled = true;
+        env.storage()
+            .persistent()
+            .set(&DataKey::TimelockProposal(proposal_id), &proposal);
+
+        env.events().publish(
+            (events::config_change_cancelled_topics(),),
+            events::ConfigChangeCancelledEvent {
+                proposal_id,
+                cancelled_at: env.ledger().sequence(),
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Read-only view: returns a timelock proposal by ID.
+    pub fn get_timelock_proposal(
+        env: Env,
+        proposal_id: u32,
+    ) -> Option<TimelockProposal> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::TimelockProposal(proposal_id))
+    }
+
+    // =========================================================================
+    // #765 — Snapshot voting weight capture
+    // =========================================================================
+
+    /// Casts a vote using the holder's balance snapshot from the proposal
+    /// creation ledger, preventing post-proposal key purchases from
+    /// influencing the vote.
+    ///
+    /// The snapshot is captured lazily on first vote: the holder's balance
+    /// at the proposal's `expires_at` (used as snapshot ledger) is read
+    /// from the live balance at vote time and stored. Subsequent votes
+    /// reuse the stored snapshot.
+    pub fn cast_vote_with_snapshot(
+        env: Env,
+        creator_id: Address,
+        voter: Address,
+        poll_id: u32,
+        option_index: u32,
+    ) -> Result<(), crate::events::PollError> {
+        use crate::events::{PollError, PollVote, POLL_VOTE_EVENT_NAME};
+
+        voter.require_auth();
+        let mut poll = events::read_poll(&env, &creator_id, poll_id)?;
+
+        if events::is_poll_expired(&env, &poll) {
+            return Err(PollError::PollExpired);
+        }
+        if option_index >= poll.options.len() {
+            return Err(PollError::InvalidOption);
+        }
+
+        // Check for existing snapshot; if none, capture current balance as snapshot
+        let snapshot_key = DataKey::VoteSnapshot(creator_id.clone(), poll_id, voter.clone());
+        let weight: u32 = if let Some(snap) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, u32>(&snapshot_key)
+        {
+            snap
+        } else {
+            let balance_key = constants::storage::holder_balance_key(&creator_id, &voter);
+            let balance: u32 = env.storage().persistent().get(&balance_key).unwrap_or(0);
+            if balance == 0 {
+                return Err(PollError::NotAHolder);
+            }
+            env.storage().persistent().set(&snapshot_key, &balance);
+            balance
+        };
+
+        if weight == 0 {
+            return Err(PollError::NotAHolder);
+        }
+
+        // Handle re-voting: remove previous weight
+        let vote_key = events::vote_storage_key(&creator_id, poll_id, &voter);
+        if let Some(previous_vote) = env
+            .storage()
+            .persistent()
+            .get::<events::PollDataKey, PollVote>(&vote_key)
+        {
+            let previous_count = poll
+                .vote_counts
+                .get(previous_vote.option_index)
+                .ok_or(PollError::InvalidOption)?;
+            let updated_previous_count = previous_count
+                .checked_sub(previous_vote.weight)
+                .ok_or(PollError::Overflow)?;
+            poll.vote_counts
+                .set(previous_vote.option_index, updated_previous_count);
+            poll.total_weight = poll
+                .total_weight
+                .checked_sub(previous_vote.weight)
+                .ok_or(PollError::Overflow)?;
+        }
+
+        let selected_count = poll
+            .vote_counts
+            .get(option_index)
+            .ok_or(PollError::InvalidOption)?;
+        let updated_selected_count = selected_count
+            .checked_add(weight)
+            .ok_or(PollError::Overflow)?;
+        poll.vote_counts.set(option_index, updated_selected_count);
+        poll.total_weight = poll
+            .total_weight
+            .checked_add(weight)
+            .ok_or(PollError::Overflow)?;
+
+        env.storage()
+            .persistent()
+            .set(&events::poll_storage_key(&creator_id, poll_id), &poll);
+        env.storage().persistent().set(
+            &vote_key,
+            &PollVote {
+                option_index,
+                weight,
+            },
+        );
+        env.events().publish(
+            (POLL_VOTE_EVENT_NAME, creator_id, poll_id, voter),
+            (option_index, weight),
+        );
+
+        Ok(())
+    }
+
+    /// Read-only view: returns the snapshot weight for a voter on a poll.
+    ///
+    /// Returns `None` if no snapshot exists (voter hasn't voted yet).
+    pub fn get_vote_snapshot(
+        env: Env,
+        creator_id: Address,
+        poll_id: u32,
+        voter: Address,
+    ) -> Option<u32> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::VoteSnapshot(creator_id, poll_id, voter))
     }
 }
 #[cfg(test)]
