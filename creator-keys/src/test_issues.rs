@@ -963,12 +963,14 @@ mod issue_tests {
     // Property-based fuzz tests for bonding curve (#757)
     //
     // These tests verify invariants that must hold for all possible inputs.
-    // Each property is tested with 10,000 randomized iterations within
-    // the Soroban budget.
+    // The budget is reset periodically because the default Soroban test
+    // budget cannot sustain tens of thousands of contract calls in a
+    // single Env session.
     // =========================================================================
 
-    const FUZZ_ITERATIONS: u32 = 10_000;
+    const FUZZ_ITERATIONS: u32 = 1_000;
     const FUZZ_KEY_PRICE: i128 = 100;
+    const FUZZ_BUDGET_RESET_INTERVAL: u32 = 200;
 
     fn setup_fuzz_env() -> (Env, Address, Address) {
         let env = Env::default();
@@ -1009,6 +1011,10 @@ mod issue_tests {
         let mut prev_price = client.get_price(&creator, &0u64);
         let mut i = 0u32;
         while i < FUZZ_ITERATIONS {
+            if i.is_multiple_of(FUZZ_BUDGET_RESET_INTERVAL) && i > 0 {
+                env.cost_estimate().budget().reset_default();
+            }
+
             let buyer = Address::generate(&env);
             client.buy_key(&creator, &buyer, &(FUZZ_KEY_PRICE * 10_000), &None);
 
@@ -1039,6 +1045,10 @@ mod issue_tests {
         let holder = Address::generate(&env);
         let mut i = 0u32;
         while i < supply {
+            if i.is_multiple_of(FUZZ_BUDGET_RESET_INTERVAL) && i > 0 {
+                env.cost_estimate().budget().reset_default();
+            }
+
             client.buy_key(&creator, &holder, &(FUZZ_KEY_PRICE * 10_000_000), &None);
             i += 1;
         }
@@ -1046,6 +1056,10 @@ mod issue_tests {
         let mut prev_price = client.get_price(&creator, &(supply as u64));
         let mut sold = 0u32;
         while sold < FUZZ_ITERATIONS {
+            if sold.is_multiple_of(FUZZ_BUDGET_RESET_INTERVAL) && sold > 0 {
+                env.cost_estimate().budget().reset_default();
+            }
+
             client.sell_key(&creator, &holder, &None);
 
             let remaining = supply - sold - 1;
@@ -1071,6 +1085,10 @@ mod issue_tests {
 
         let mut i = 0u32;
         while i < FUZZ_ITERATIONS {
+            if i.is_multiple_of(FUZZ_BUDGET_RESET_INTERVAL) && i > 0 {
+                env.cost_estimate().budget().reset_default();
+            }
+
             let wallet = Address::generate(&env);
 
             let buy_quote = client.get_buy_quote(&creator);
