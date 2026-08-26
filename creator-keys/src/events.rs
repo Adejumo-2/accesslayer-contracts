@@ -622,6 +622,93 @@ pub fn config_change_cancelled_topics() -> Symbol {
     CONFIG_CHANGE_CANCELLED_EVENT_NAME
 }
 
+// --- Circuit breaker, referral fee, whitelist, burn events ---
+
+pub const CIRCUIT_BREAKER_TRIGGERED_EVENT_NAME: Symbol = symbol_short!("cb_trig");
+pub const REFERRAL_FEE_PAID_EVENT_NAME: Symbol = symbol_short!("ref_paid");
+pub const WHITELIST_ENABLED_EVENT_NAME: Symbol = symbol_short!("wl_en");
+pub const WHITELIST_DISABLED_EVENT_NAME: Symbol = symbol_short!("wl_dis");
+pub const ADDRESS_WHITELISTED_EVENT_NAME: Symbol = symbol_short!("wl_add");
+pub const ADDRESS_REMOVED_EVENT_NAME: Symbol = symbol_short!("wl_rem");
+pub const KEYS_BURNED_EVENT_NAME: Symbol = symbol_short!("burned");
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct CircuitBreakerTriggeredEvent {
+    pub pre_price: i128,
+    pub post_price: i128,
+}
+
+pub fn circuit_breaker_triggered_topics() -> Symbol {
+    CIRCUIT_BREAKER_TRIGGERED_EVENT_NAME
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct ReferralFeePaidEvent {
+    pub referrer: Address,
+    pub amount: i128,
+}
+
+pub fn referral_fee_paid_topics() -> Symbol {
+    REFERRAL_FEE_PAID_EVENT_NAME
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct WhitelistEnabledEvent {
+    pub creator: Address,
+}
+
+pub fn whitelist_enabled_topics(creator: &Address) -> (Symbol, Address) {
+    (WHITELIST_ENABLED_EVENT_NAME, creator.clone())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct WhitelistDisabledEvent {
+    pub creator: Address,
+}
+
+pub fn whitelist_disabled_topics(creator: &Address) -> (Symbol, Address) {
+    (WHITELIST_DISABLED_EVENT_NAME, creator.clone())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct AddressWhitelistedEvent {
+    pub creator: Address,
+    pub address: Address,
+}
+
+pub fn address_whitelisted_topics(creator: &Address) -> (Symbol, Address) {
+    (ADDRESS_WHITELISTED_EVENT_NAME, creator.clone())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct AddressRemovedEvent {
+    pub creator: Address,
+    pub address: Address,
+}
+
+pub fn address_removed_topics(creator: &Address) -> (Symbol, Address) {
+    (ADDRESS_REMOVED_EVENT_NAME, creator.clone())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct KeysBurnedEvent {
+    pub wallet: Address,
+    pub key_id: Address,
+    pub quantity: u32,
+    pub new_supply: u32,
+}
+
+pub fn keys_burned_topics(key_id: &Address) -> (Symbol, Address) {
+    (KEYS_BURNED_EVENT_NAME, key_id.clone())
+}
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]

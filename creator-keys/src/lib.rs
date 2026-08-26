@@ -4,6 +4,7 @@ pub mod quote_view_errors;
 use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, String, Vec};
 
 pub mod events;
+pub mod test_new_features;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -87,6 +88,16 @@ pub enum ContractError {
     SchemaVersionTooOld = 38,
     SchemaVersionUnsupported = 39,
     DisplayNameEmpty = 40,
+    DeadlinePassed = 41,
+    CapAlreadySet = 42,
+    MultisigAdminLimitExceeded = 43,
+    AlreadyApproved = 44,
+    ProposalNotFound = 45,
+    VestingNotFound = 46,
+    VestingNotStarted = 47,
+    NothingToClaim = 48,
+    NotWhitelisted = 49,
+    CircuitBreakerTriggered = 50,
 }
 
 pub mod fee {
@@ -404,6 +415,20 @@ pub mod constants {
             DataKey::VestingSchedule(creator.clone(), beneficiary.clone())
         }
 
+        pub const CIRCUIT_BREAKER_THRESHOLD: DataKey = DataKey::CircuitBreakerThreshold;
+
+        pub fn referral_earnings(referrer: &Address) -> DataKey {
+            DataKey::ReferralEarnings(referrer.clone())
+        }
+
+        pub fn whitelist_entry(key_id: &Address, wallet: &Address) -> DataKey {
+            DataKey::WhitelistMap(key_id.clone(), wallet.clone())
+        }
+
+        pub fn whitelist_mode(key_id: &Address) -> DataKey {
+            DataKey::WhitelistMode(key_id.clone())
+        }
+
         pub fn vesting_claimed(creator: &Address, beneficiary: &Address) -> DataKey {
             DataKey::VestingClaimed(creator.clone(), beneficiary.clone())
         }
@@ -704,6 +729,10 @@ pub enum DataKey {
     TimelockProposal(u32),
     TimelockNextId,
     VoteSnapshot(Address, u32, Address),
+    CircuitBreakerThreshold,
+    ReferralEarnings(Address),
+    WhitelistMap(Address, Address),
+    WhitelistMode(Address),
 }
 
 /// Time-locked key allocation for creator self-vesting.
@@ -898,6 +927,17 @@ fn assert_whitelist_allows_buy(
     profile: &CreatorProfile,
     buyer: &Address,
 ) -> Result<(), ContractError> {
+    let mode_key = constants::storage::whitelist_mode(&profile.creator);
+    let is_mode_on: bool = env.storage().persistent().get(&mode_key).unwrap_or(false);
+    if is_mode_on {
+        let entry_key = constants::storage::whitelist_entry(&profile.creator, buyer);
+        let is_approved: bool = env.storage().persistent().get(&entry_key).unwrap_or(false);
+        if !is_approved {
+            return Err(ContractError::NotWhitelisted);
+        }
+        return Ok(());
+    }
+
     let status = whitelist_status(env, profile);
     if !status.active {
         return Ok(());
@@ -1916,8 +1956,8 @@ impl CreatorKeysContract {
             return Err(ContractError::NotPositiveAmount);
         }
 
-        if let Some(referrer_addr) = referrer.as_ref() {
-            if *referrer_addr == buyer {
+        if let Some(ref referrer_addr) = referrer {
+            if *referrer_addr == buyer || *referrer_addr == creator {
                 return Err(ContractError::InvalidReferrer);
             }
         }
@@ -1930,7 +1970,40 @@ impl CreatorKeysContract {
 
         let mut profile: CreatorProfile = read_registered_creator_profile(&env, &creator)?;
         assert_whitelist_allows_buy(&env, &profile, &buyer)?;
-        let price = compute_bonding_curve_price(&env, &creator, base_price, profile.supply)?;
+        let pre_price = compute_bonding_curve_price(&env, &creator, base_price, profile.supply)?;
+
+        // Circuit breaker pre/post price check
+        let post_supply = profile
+            .supply
+            .checked_add(1)
+            .ok_or(ContractError::Overflow)?;
+        let post_price = compute_bonding_curve_price(&env, &creator, base_price, post_supply)?;
+
+        let threshold_pct: u32 = env
+            .storage()
+            .persistent()
+            .get(&constants::storage::CIRCUIT_BREAKER_THRESHOLD)
+            .unwrap_or(30);
+
+        if pre_price > 0 {
+            let price_change = post_price.saturating_sub(pre_price);
+            let max_change = (pre_price as u128)
+                .checked_mul(threshold_pct as u128)
+                .ok_or(ContractError::Overflow)?
+                / 100;
+            if (price_change as u128) >= max_change {
+                env.events().publish(
+                    (events::circuit_breaker_triggered_topics(),),
+                    events::CircuitBreakerTriggeredEvent {
+                        pre_price,
+                        post_price,
+                    },
+                );
+                return Err(ContractError::CircuitBreakerTriggered);
+            }
+        }
+
+        let price = pre_price;
 
         assert_buy_price_slippage(price, max_price)?;
 
@@ -2007,43 +2080,26 @@ impl CreatorKeysContract {
 
             // Split protocol fee between treasury and referrer only when a referrer is provided
             if let Some(referrer_addr) = referrer {
-                let referral_fee_bps = env
-                    .storage()
-                    .persistent()
-                    .get::<DataKey, u32>(&constants::storage::referral_fee_bps())
-                    .unwrap_or(DEFAULT_REFERRAL_FEE_BPS);
-
-                let (treasury_amount, referral_amount) =
-                    fee::checked_split_bps_amount(protocol_fee, referral_fee_bps)
-                        .ok_or(ContractError::Overflow)?;
+                let referral_amount = protocol_fee / 2;
+                let treasury_amount = protocol_fee - referral_amount;
 
                 credit_treasury_balance(&env, treasury_amount)?;
                 credit_protocol_fee_recipient_balance(&env, treasury_amount)?;
 
                 if referral_amount > 0 {
-                    // Store referral fee as pending balance for referrer
-                    let referrer_balance_key =
-                        constants::storage::holder_balance_key(&creator, &referrer_addr);
-                    let referrer_current: u32 = env
-                        .storage()
-                        .persistent()
-                        .get(&referrer_balance_key)
-                        .unwrap_or(0);
-                    let referrer_new = referrer_current
-                        .checked_add(referral_amount as u32)
+                    let ref_key = constants::storage::referral_earnings(&referrer_addr);
+                    let current_earnings: i128 = env.storage().persistent().get(&ref_key).unwrap_or(0);
+                    let new_earnings = current_earnings
+                        .checked_add(referral_amount)
                         .ok_or(ContractError::Overflow)?;
-                    env.storage()
-                        .persistent()
-                        .set(&referrer_balance_key, &referrer_new);
+                    env.storage().persistent().set(&ref_key, &new_earnings);
+                    extend_key_ttl_to_full_window(&env, &ref_key);
 
                     env.events().publish(
-                        events::referral_fee_earned_topics(&creator, &referrer_addr),
-                        events::ReferralFeeEarnedEvent {
-                            creator_id: creator.clone(),
-                            buyer: buyer.clone(),
+                        (events::referral_fee_paid_topics(),),
+                        events::ReferralFeePaidEvent {
                             referrer: referrer_addr,
                             amount: referral_amount,
-                            ledger: env.ledger().sequence(),
                         },
                     );
                 }
@@ -4286,6 +4342,187 @@ impl CreatorKeysContract {
         );
 
         Ok(claimable)
+    }
+
+    pub fn set_circuit_breaker_threshold(
+        env: Env,
+        admin: Address,
+        threshold: u32,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        assert_is_admin(&env, &admin)?;
+
+        let key = constants::storage::CIRCUIT_BREAKER_THRESHOLD;
+        env.storage().persistent().set(&key, &threshold);
+        extend_key_ttl_to_full_window(&env, &key);
+        Ok(())
+    }
+
+    pub fn get_referral_earnings(env: Env, address: Address) -> i128 {
+        let ref_key = constants::storage::referral_earnings(&address);
+        env.storage().persistent().get(&ref_key).unwrap_or(0)
+    }
+
+    pub fn enable_whitelist(env: Env, creator: Address) -> Result<(), ContractError> {
+        creator.require_auth();
+        let profile = read_registered_creator_profile(&env, &creator)?;
+        if profile.creator != creator {
+            return Err(ContractError::Unauthorized);
+        }
+
+        let mode_key = constants::storage::whitelist_mode(&creator);
+        env.storage().persistent().set(&mode_key, &true);
+        extend_key_ttl_to_full_window(&env, &mode_key);
+
+        env.events().publish(
+            events::whitelist_enabled_topics(&creator),
+            events::WhitelistEnabledEvent {
+                creator,
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn disable_whitelist(env: Env, creator: Address) -> Result<(), ContractError> {
+        creator.require_auth();
+        let profile = read_registered_creator_profile(&env, &creator)?;
+        if profile.creator != creator {
+            return Err(ContractError::Unauthorized);
+        }
+
+        let mode_key = constants::storage::whitelist_mode(&creator);
+        env.storage().persistent().set(&mode_key, &false);
+        extend_key_ttl_to_full_window(&env, &mode_key);
+
+        env.events().publish(
+            events::whitelist_disabled_topics(&creator),
+            events::WhitelistDisabledEvent {
+                creator,
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn add_to_whitelist(
+        env: Env,
+        creator: Address,
+        address: Address,
+    ) -> Result<(), ContractError> {
+        creator.require_auth();
+        let profile = read_registered_creator_profile(&env, &creator)?;
+        if profile.creator != creator {
+            return Err(ContractError::Unauthorized);
+        }
+
+        let entry_key = constants::storage::whitelist_entry(&creator, &address);
+        env.storage().persistent().set(&entry_key, &true);
+        extend_key_ttl_to_full_window(&env, &entry_key);
+
+        env.events().publish(
+            events::address_whitelisted_topics(&creator),
+            events::AddressWhitelistedEvent {
+                creator,
+                address,
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn remove_from_whitelist(
+        env: Env,
+        creator: Address,
+        address: Address,
+    ) -> Result<(), ContractError> {
+        creator.require_auth();
+        let profile = read_registered_creator_profile(&env, &creator)?;
+        if profile.creator != creator {
+            return Err(ContractError::Unauthorized);
+        }
+
+        let entry_key = constants::storage::whitelist_entry(&creator, &address);
+        env.storage().persistent().set(&entry_key, &false);
+        extend_key_ttl_to_full_window(&env, &entry_key);
+
+        env.events().publish(
+            events::address_removed_topics(&creator),
+            events::AddressRemovedEvent {
+                creator,
+                address,
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn burn(
+        env: Env,
+        caller: Address,
+        key_id: Address,
+        quantity: u32,
+    ) -> Result<u32, ContractError> {
+        caller.require_auth();
+        assert_not_paused(&env)?;
+
+        if quantity == 0 {
+            return Err(ContractError::NotPositiveAmount);
+        }
+
+        let mut profile = read_registered_creator_profile(&env, &key_id)?;
+        let balance_key = constants::storage::holder_balance_key(&key_id, &caller);
+        let current_balance: u32 = env.storage().persistent().get(&balance_key).unwrap_or(0);
+
+        if current_balance < quantity {
+            return Err(ContractError::InsufficientBalance);
+        }
+
+        settle_holder_dividends(&env, &key_id, &caller, current_balance)?;
+
+        let new_balance = current_balance
+            .checked_sub(quantity)
+            .ok_or(ContractError::Overflow)?;
+        env.storage().persistent().set(&balance_key, &new_balance);
+
+        let new_supply = profile
+            .supply
+            .checked_sub(quantity)
+            .ok_or(ContractError::Overflow)?;
+
+        if current_balance > 0 && new_balance == 0 {
+            profile.holder_count = profile
+                .holder_count
+                .checked_sub(1)
+                .unwrap_or(0);
+        }
+
+        profile.supply = new_supply;
+        let profile_key = constants::storage::creator(&key_id);
+        env.storage().persistent().set(&profile_key, &profile);
+
+        write_creator_supply(&env, &key_id, new_supply);
+
+        let base_price: i128 = env
+            .storage()
+            .persistent()
+            .get(&constants::storage::KEY_PRICE)
+            .ok_or(ContractError::KeyPriceNotSet)?;
+        let _new_price = compute_bonding_curve_price(&env, &key_id, base_price, new_supply)?;
+
+        env.events().publish(
+            events::keys_burned_topics(&key_id),
+            events::KeysBurnedEvent {
+                wallet: caller,
+                key_id: key_id.clone(),
+                quantity,
+                new_supply,
+            },
+        );
+
+        extend_creator_ttl(&env, &key_id);
+
+        Ok(new_supply)
     }
 
     /// Read-only view: returns the vesting schedule for a beneficiary.
