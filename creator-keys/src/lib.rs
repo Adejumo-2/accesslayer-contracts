@@ -87,6 +87,9 @@ pub enum ContractError {
     SchemaVersionTooOld = 38,
     SchemaVersionUnsupported = 39,
     DeadlinePassed = 40,
+    BatchSizeExceeded = 41,
+    InvalidExponent = 42,
+    RoyaltyExceedsLimit = 43,
 }
 
 pub mod fee {
@@ -386,6 +389,14 @@ pub mod constants {
             DataKey::ReferralFeeBps
         }
 
+        pub fn royalty_config(creator: &Address) -> DataKey {
+            DataKey::RoyaltyConfig(creator.clone())
+        }
+
+        pub fn curve_exponent(creator: &Address) -> DataKey {
+            DataKey::CurveExponent(creator.clone())
+        }
+
         /// Absolute live-until ledger the contract last set for `creator`'s
         /// profile key, used to decide whether to emit the TTL-extension event.
         pub fn creator_ttl_live_until(creator: &Address) -> DataKey {
@@ -606,6 +617,12 @@ pub const DEFAULT_REFERRAL_FEE_BPS: u32 = 2000;
 /// Maximum number of discount tiers allowed.
 pub const MAX_DISCOUNT_TIERS: u32 = 5;
 
+/// Maximum number of entries in a single batch buy call.
+pub const MAX_BATCH_BUY_SIZE: usize = 5;
+
+/// Maximum royalty fee basis points (5%).
+pub const MAX_ROYALTY_BPS: u32 = 500;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[contracttype]
 pub enum CurvePreset {
@@ -679,6 +696,10 @@ pub enum DataKey {
     /// Protocol-wide ledger sequence at (and after) which buys are rejected.
     /// Absent means no deadline is configured and buys are never time-gated.
     GlobalDeadlineLedger,
+    /// Creator royalty configuration for buy and sell fees.
+    RoyaltyConfig(Address),
+    /// Per-creator bonding curve exponent override (1–5).
+    CurveExponent(Address),
 }
 
 /// Time-locked key allocation for creator self-vesting.
@@ -741,6 +762,23 @@ pub struct WhitelistStatus {
     pub active: bool,
     pub expires_at_ledger: u32,
     pub remaining_ledgers: u32,
+}
+
+/// Creator royalty configuration for buy and sell fees.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct RoyaltyConfig {
+    pub buy_fee_bps: u32,
+    pub sell_fee_bps: u32,
+}
+
+/// Result of a single order in a batch buy.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct BatchBuyOrderResult {
+    pub creator: Address,
+    pub quantity: u32,
+    pub price_paid: i128,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1297,6 +1335,14 @@ fn accrue_sell_trade_fees(env: &Env, creator: &Address, price: i128) -> Result<(
         credit_protocol_fee_recipient_balance(env, protocol_fee)?;
     }
 
+    if let Some(royalty) = read_royalty_config(env, creator) {
+        let royalty_amount = fee::apply_percentage_fee(price, royalty.sell_fee_bps)
+            .ok_or(ContractError::Overflow)?;
+        if royalty_amount > 0 {
+            credit_creator_fee_recipient_balance(env, creator, royalty_amount)?;
+        }
+    }
+
     Ok(())
 }
 
@@ -1363,12 +1409,35 @@ fn read_curve_slope(env: &Env) -> i128 {
         .unwrap_or(0)
 }
 
+fn read_royalty_config(env: &Env, creator: &Address) -> Option<RoyaltyConfig> {
+    env.storage()
+        .persistent()
+        .get(&constants::storage::royalty_config(creator))
+}
+
+fn read_curve_exponent(env: &Env, creator: &Address) -> Option<u32> {
+    env.storage()
+        .persistent()
+        .get(&constants::storage::curve_exponent(creator))
+}
+
 fn compute_bonding_curve_price(
     env: &Env,
     creator: &Address,
     base_price: i128,
     supply: u32,
 ) -> Result<i128, ContractError> {
+    if let Some(exponent) = read_curve_exponent(env, creator) {
+        let slope = read_curve_slope(env);
+        let supply_exp = checked_pow_i128(supply as i128, exponent)?;
+        let supply_component = slope
+            .checked_mul(supply_exp)
+            .ok_or(ContractError::Overflow)?;
+        return base_price
+            .checked_add(supply_component)
+            .ok_or(ContractError::Overflow);
+    }
+
     let preset = env
         .storage()
         .persistent()
@@ -1399,6 +1468,16 @@ fn compute_bonding_curve_price(
                 .ok_or(ContractError::Overflow)
         }
     }
+}
+
+fn checked_pow_i128(base: i128, exp: u32) -> Result<i128, ContractError> {
+    let mut result: i128 = 1;
+    let mut _exp = exp;
+    while _exp > 0 {
+        result = result.checked_mul(base).ok_or(ContractError::Overflow)?;
+        _exp -= 1;
+    }
+    Ok(result)
 }
 
 fn zero_quote_response() -> QuoteResponse {
@@ -1967,6 +2046,14 @@ impl CreatorKeysContract {
                 // No referrer: full protocol fee goes to treasury and recipient
                 credit_treasury_balance(&env, protocol_fee)?;
                 credit_protocol_fee_recipient_balance(&env, protocol_fee)?;
+            }
+        }
+
+        if let Some(royalty) = read_royalty_config(&env, &creator) {
+            let royalty_amount = fee::apply_percentage_fee(price, royalty.buy_fee_bps)
+                .ok_or(ContractError::Overflow)?;
+            if royalty_amount > 0 {
+                credit_creator_fee_recipient_balance(&env, &creator, royalty_amount)?;
             }
         }
 
@@ -3852,6 +3939,237 @@ impl CreatorKeysContract {
             .unwrap_or(0);
 
         total_balance.saturating_sub(staked_balance)
+    }
+
+    /// Batch buy keys for multiple creators in a single atomic transaction.
+    ///
+    /// Accepts 1–5 orders. Each order specifies a creator address and quantity.
+    /// If any order fails, the entire batch reverts.
+    ///
+    /// Emits a `batch_buy_completed` event on success.
+    pub fn batch_buy(
+        env: Env,
+        buyer: Address,
+        orders: Vec<(Address, u32)>,
+    ) -> Result<Vec<BatchBuyOrderResult>, ContractError> {
+        buyer.require_auth();
+        assert_not_paused(&env)?;
+        assert_not_blacklisted(&env, &buyer)?;
+        assert_before_global_deadline(&env)?;
+
+        if orders.is_empty() || orders.len() > MAX_BATCH_BUY_SIZE as u32 {
+            return Err(ContractError::BatchSizeExceeded);
+        }
+
+        let base_price: i128 = env
+            .storage()
+            .persistent()
+            .get(&constants::storage::KEY_PRICE)
+            .ok_or(ContractError::KeyPriceNotSet)?;
+
+        let mut results = soroban_sdk::Vec::new(&env);
+        let mut total_price_paid: i128 = 0;
+
+        for order in orders.iter() {
+            let (creator, quantity) = order;
+            if quantity == 0 {
+                return Err(ContractError::NotPositiveAmount);
+            }
+
+            let mut profile: CreatorProfile = read_registered_creator_profile(&env, &creator)?;
+            assert_whitelist_allows_buy(&env, &profile, &buyer)?;
+
+            let mut order_price: i128 = 0;
+
+            let mut i = 0u32;
+            while i < quantity {
+                let price =
+                    compute_bonding_curve_price(&env, &creator, base_price, profile.supply)?;
+
+                if let Some(config) = read_protocol_fee_config(&env) {
+                    let (creator_fee, protocol_fee) = fee::checked_compute_fee_split(
+                        price,
+                        config.creator_bps,
+                        config.protocol_bps,
+                    )
+                    .ok_or(ContractError::Overflow)?;
+                    credit_creator_fee(&env, &creator, creator_fee)?;
+                    credit_treasury_balance(&env, protocol_fee)?;
+                    credit_protocol_fee_recipient_balance(&env, protocol_fee)?;
+                }
+
+                if let Some(royalty) = read_royalty_config(&env, &creator) {
+                    let royalty_amount = fee::apply_percentage_fee(price, royalty.buy_fee_bps)
+                        .ok_or(ContractError::Overflow)?;
+                    if royalty_amount > 0 {
+                        credit_creator_fee_recipient_balance(&env, &creator, royalty_amount)?;
+                    }
+                }
+
+                order_price = order_price
+                    .checked_add(price)
+                    .ok_or(ContractError::Overflow)?;
+
+                let balance_key = constants::storage::holder_balance_key(&creator, &buyer);
+                let current_balance: u32 =
+                    env.storage().persistent().get(&balance_key).unwrap_or(0);
+
+                if current_balance == 0 {
+                    profile.holder_count = profile
+                        .holder_count
+                        .checked_add(1)
+                        .ok_or(ContractError::Overflow)?;
+                }
+
+                let key = constants::storage::creator(&creator);
+                env.storage().persistent().set(&key, &profile);
+
+                profile.supply = profile
+                    .supply
+                    .checked_add(1)
+                    .ok_or(ContractError::Overflow)?;
+
+                write_creator_supply(&env, &creator, profile.supply);
+
+                let new_balance = current_balance
+                    .checked_add(1)
+                    .ok_or(ContractError::Overflow)?;
+                env.storage().persistent().set(&balance_key, &new_balance);
+                extend_key_ttl_to_full_window(&env, &balance_key);
+
+                i += 1;
+            }
+
+            env.events().publish(
+                events::buy_event_topics(&creator, &buyer),
+                events::KeysBoughtEvent {
+                    buyer: buyer.clone(),
+                    creator_id: creator.clone(),
+                    quantity,
+                    price_paid: order_price,
+                    new_supply: profile.supply,
+                    ledger: env.ledger().sequence(),
+                },
+            );
+
+            total_price_paid = total_price_paid
+                .checked_add(order_price)
+                .ok_or(ContractError::Overflow)?;
+
+            results.push_back(BatchBuyOrderResult {
+                creator,
+                quantity,
+                price_paid: order_price,
+            });
+        }
+
+        env.events().publish(
+            events::batch_buy_completed_topics(&buyer),
+            events::BatchBuyCompletedEvent {
+                buyer: buyer.clone(),
+                total_price_paid,
+                order_count: results.len(),
+                ledger: env.ledger().sequence(),
+            },
+        );
+
+        Ok(results)
+    }
+
+    /// Set royalty configuration for a creator's keys.
+    ///
+    /// Only callable by the creator. The royalty fees are applied on top of
+    /// the protocol fee during buy and sell operations.
+    ///
+    /// Both `buy_fee_bps` and `sell_fee_bps` must be in the range 0–500 (0%–5%).
+    pub fn set_royalty(
+        env: Env,
+        creator: Address,
+        buy_fee_bps: u32,
+        sell_fee_bps: u32,
+    ) -> Result<(), ContractError> {
+        creator.require_auth();
+        assert_not_paused(&env)?;
+
+        if buy_fee_bps > MAX_ROYALTY_BPS || sell_fee_bps > MAX_ROYALTY_BPS {
+            return Err(ContractError::RoyaltyExceedsLimit);
+        }
+
+        let _profile: CreatorProfile = read_registered_creator_profile(&env, &creator)?;
+
+        let config = RoyaltyConfig {
+            buy_fee_bps,
+            sell_fee_bps,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&constants::storage::royalty_config(&creator), &config);
+
+        env.events().publish(
+            events::royalty_updated_topics(&creator),
+            events::RoyaltyUpdatedEvent {
+                creator,
+                buy_fee_bps,
+                sell_fee_bps,
+                ledger: env.ledger().sequence(),
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Read-only view: returns the royalty configuration for a creator.
+    pub fn get_royalty_config(env: Env, creator: Address) -> Option<RoyaltyConfig> {
+        read_royalty_config(&env, &creator)
+    }
+
+    /// Migrate the bonding curve exponent for a set of creators.
+    ///
+    /// Only callable by the protocol admin. Changes the pricing curve exponent
+    /// (1–5) for each specified creator. The new exponent takes effect immediately
+    /// for subsequent buy and sell operations.
+    pub fn migrate_curve(
+        env: Env,
+        admin: Address,
+        new_exponent: u32,
+        key_ids: Vec<Address>,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        assert_is_admin(&env, &admin)?;
+
+        if !(1..=5).contains(&new_exponent) {
+            return Err(ContractError::InvalidExponent);
+        }
+
+        if key_ids.is_empty() {
+            return Err(ContractError::NotPositiveAmount);
+        }
+
+        for key_id in key_ids.iter() {
+            let _profile: CreatorProfile = read_registered_creator_profile(&env, &key_id)?;
+
+            env.storage()
+                .persistent()
+                .set(&constants::storage::curve_exponent(&key_id), &new_exponent);
+        }
+
+        env.events().publish(
+            events::curve_migrated_topics(&admin),
+            events::CurveMigratedEvent {
+                admin,
+                new_exponent,
+                key_count: key_ids.len(),
+                ledger: env.ledger().sequence(),
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Read-only view: returns the curve exponent for a creator, if set.
+    pub fn get_curve_exponent(env: Env, creator: Address) -> Option<u32> {
+        read_curve_exponent(&env, &creator)
     }
 }
 #[cfg(test)]
