@@ -45,6 +45,9 @@ Defined in [`creator-keys/src/lib.rs`](../creator-keys/src/lib.rs#L50-L83) as `p
 | `31` | `WhitelistOnly` | Buyer address is not in creator whitelist during whitelist window | Triggered in [`check_whitelist`](../creator-keys/src/lib.rs#L683) when whitelist is active and buyer is not allowed. |
 | `32` | `WhitelistTooLarge` | Whitelist configuration address count exceeds maximum limit | Triggered in [`validate_whitelist_config`](../creator-keys/src/lib.rs#L637) when address count `> MAX_WHITELIST_SIZE`. |
 | `33` | `AirdropRecipientLimitExceeded` | Airdrop recipient list length exceeds max limit per transaction | Triggered in [`airdrop_keys`](../creator-keys/src/lib.rs#L1730) when `recipients.len() > MAX_AIRDROP_RECIPIENT_LIMIT`. |
+| `41` | `MaxHoldingExceeded` | Purchase would push a wallet above the creator-configured holding cap share of supply | Triggered in [`buy_key`](../creator-keys/src/lib.rs) when a non-creator buyer's post-buy balance exceeds the cap set via `set_holder_cap`. |
+| `42` | `LockupPeriodActive` | Sell attempted before the configured lockup window since the seller's most recent buy has elapsed | Triggered in [`sell_key`](../creator-keys/src/lib.rs) when the current ledger timestamp is inside the lockup configured via `set_lockup_duration`. |
+| `43` | `InvalidHolderCap` | Holder cap basis points outside the allowed range (`HOLDER_CAP_MIN_BPS..=HOLDER_CAP_MAX_BPS`, i.e. 1%–25%) | Triggered in [`set_holder_cap`](../creator-keys/src/lib.rs) when `cap_bps` is below 100 or above 2500. |
 
 ---
 
