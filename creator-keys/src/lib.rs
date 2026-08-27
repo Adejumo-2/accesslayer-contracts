@@ -1600,7 +1600,7 @@ fn read_trade_fee_config(env: &Env) -> Option<(u32, Address)> {
     let fee_bps: u32 = env
         .storage()
         .persistent()
-        .get(&soroban_sdk::symbol_short!("pr_fee_bps"))?
+        .get(&soroban_sdk::symbol_short!("pr_fee_bps"))?;
     let treasury: Address = env
         .storage()
         .persistent()
