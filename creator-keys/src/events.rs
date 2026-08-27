@@ -631,6 +631,16 @@ pub const WHITELIST_DISABLED_EVENT_NAME: Symbol = symbol_short!("wl_dis");
 pub const ADDRESS_WHITELISTED_EVENT_NAME: Symbol = symbol_short!("wl_add");
 pub const ADDRESS_REMOVED_EVENT_NAME: Symbol = symbol_short!("wl_rem");
 pub const KEYS_BURNED_EVENT_NAME: Symbol = symbol_short!("burned");
+pub const SELF_FREEZE_APPLIED_EVENT_NAME: Symbol = symbol_short!("sf_add");
+pub const SELF_FREEZE_LIFTED_EVENT_NAME: Symbol = symbol_short!("sf_del");
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct SelfFreezeEvent {
+    pub key_id: Address,
+    pub wallet: Address,
+    pub quantity: u32,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
