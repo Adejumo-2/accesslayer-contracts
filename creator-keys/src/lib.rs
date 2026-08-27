@@ -415,11 +415,11 @@ pub mod constants {
         }
 
         pub fn royalty_config(creator: &Address) -> DataKey {
-            DataKey::RoyaltyConfig(creator.clone())
+            DataKey::Creator(creator.clone())
         }
 
         pub fn curve_exponent(creator: &Address) -> DataKey {
-            DataKey::CurveExponent(creator.clone())
+            DataKey::Creator(creator.clone())
         }
 
         /// Absolute live-until ledger the contract last set for `creator`'s
@@ -459,11 +459,11 @@ pub mod constants {
         }
 
         pub fn holder_cap_bps(creator: &Address) -> DataKey {
-            DataKey::HolderCapBps(creator.clone())
+            DataKey::MaxKeysPerWallet(creator.clone())
         }
 
         pub fn last_buy_timestamp(creator: &Address, holder: &Address) -> DataKey {
-            DataKey::LastBuyTimestamp(creator.clone(), holder.clone())
+            DataKey::KeyBalance(creator.clone(), holder.clone())
         }
 
         pub fn vesting_claimed(creator: &Address, beneficiary: &Address) -> DataKey {
@@ -826,20 +826,6 @@ pub enum DataKey {
     GlobalPauseVote(Address),
     /// A pending `global_resume` vote cast by the given admin.
     GlobalResumeVote(Address),
-    /// Creator key metadata (display name, bio, avatar URI).
-    CreatorMetadata(Address),
-    /// Protocol fee basis points.
-    ProtocolFeeBps,
-    /// Sell lockup duration in seconds.
-    LockupDurationSecs,
-    /// Per-creator royalty configuration.
-    RoyaltyConfig(Address),
-    /// Per-creator bonding curve exponent.
-    CurveExponent(Address),
-    /// Per-creator holder cap basis points.
-    HolderCapBps(Address),
-    /// Per-creator-holder last buy timestamp.
-    LastBuyTimestamp(Address, Address),
 }
 
 /// Time-locked key allocation for creator self-vesting.
@@ -1298,8 +1284,9 @@ fn is_valid_handle_byte(byte: u8) -> bool {
 ///
 /// Returns `None` when no metadata has been initialised for the creator.
 pub fn read_creator_metadata(env: &Env, creator: &Address) -> Option<KeyMetadata> {
-    let key = constants::storage::creator_metadata(creator);
-    env.storage().persistent().get::<DataKey, KeyMetadata>(&key)
+    use soroban_sdk::symbol_short;
+    let key = (symbol_short!("md"), creator.clone());
+    env.storage().persistent().get(&key)
 }
 
 /// Validates the byte-length of a metadata string field.
@@ -1345,9 +1332,9 @@ fn validate_key_metadata(metadata: &KeyMetadata) -> Result<(), ContractError> {
 
 /// Writes creator key metadata to persistent storage.
 fn write_creator_metadata(env: &Env, creator: &Address, metadata: &KeyMetadata) {
-    let key = constants::storage::creator_metadata(creator);
+    use soroban_sdk::symbol_short;
+    let key = (symbol_short!("md"), creator.clone());
     env.storage().persistent().set(&key, metadata);
-    extend_key_ttl_to_full_window(env, &key);
 }
 
 /// Validates a creator's display handle.
