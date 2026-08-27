@@ -709,6 +709,96 @@ pub fn keys_burned_topics(key_id: &Address) -> (Symbol, Address) {
     (KEYS_BURNED_EVENT_NAME, key_id.clone())
 }
 
+// --- Co-creator removal, auction, and staking reward events ---
+
+/// Event name for co-creator removal.
+pub const CO_CREATOR_REMOVED_EVENT_NAME: Symbol = symbol_short!("co_rem");
+
+/// Event name for auction configuration.
+pub const AUCTION_CONFIGURED_EVENT_NAME: Symbol = symbol_short!("auc_cfg");
+
+/// Event name for auction cancellation.
+pub const AUCTION_CANCELLED_EVENT_NAME: Symbol = symbol_short!("auc_can");
+
+/// Event name for a purchase made during a creator's auction phase.
+pub const AUCTION_PURCHASE_EVENT_NAME: Symbol = symbol_short!("auc_buy");
+
+/// Event name for a staking reward claim.
+pub const STAKE_REWARD_CLAIMED_EVENT_NAME: Symbol = symbol_short!("stk_clm");
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct CoCreatorRemovedEvent {
+    pub creator_id: Address,
+    pub co_creator: Address,
+    pub ledger: u32,
+}
+
+pub fn co_creator_removed_topics(creator: &Address) -> (Symbol, Address) {
+    (CO_CREATOR_REMOVED_EVENT_NAME, creator.clone())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct AuctionConfiguredEvent {
+    pub creator_id: Address,
+    pub auction_price: i128,
+    pub auction_supply: u32,
+}
+
+pub fn auction_configured_topics(creator: &Address) -> (Symbol, Address) {
+    (AUCTION_CONFIGURED_EVENT_NAME, creator.clone())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct AuctionCancelledEvent {
+    pub creator_id: Address,
+    pub auction_price: i128,
+    pub auction_supply: u32,
+}
+
+pub fn auction_cancelled_topics(creator: &Address) -> (Symbol, Address) {
+    (AUCTION_CANCELLED_EVENT_NAME, creator.clone())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct AuctionPurchaseEvent {
+    pub buyer: Address,
+    pub creator_id: Address,
+    pub quantity: u32,
+    pub price_paid: i128,
+    pub new_supply: u32,
+    pub auction_sold: u32,
+    pub ledger: u32,
+}
+
+pub fn auction_purchase_topics(creator: &Address, buyer: &Address) -> (Symbol, Address, Address) {
+    (AUCTION_PURCHASE_EVENT_NAME, creator.clone(), buyer.clone())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct StakeRewardClaimedEvent {
+    pub wallet: Address,
+    pub key_id: Address,
+    pub quantity_unlocked: u32,
+    pub reward_amount: i128,
+    pub ledger: u32,
+}
+
+pub fn stake_reward_claimed_topics(
+    creator: &Address,
+    wallet: &Address,
+) -> (Symbol, Address, Address) {
+    (
+        STAKE_REWARD_CLAIMED_EVENT_NAME,
+        creator.clone(),
+        wallet.clone(),
+    )
+}
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]

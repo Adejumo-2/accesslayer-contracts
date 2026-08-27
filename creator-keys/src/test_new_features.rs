@@ -17,7 +17,9 @@ fn setup_test() -> (Env, CreatorKeysContractClient<'static>, Address, Address) {
 
     let admin = Address::generate(&env);
     let treasury = Address::generate(&env);
-    client.initialize(&admin, &treasury, &100i128);
+    client.set_protocol_admin(&admin, &admin);
+    client.set_treasury_address(&admin, &treasury);
+    client.set_key_price(&admin, &100i128);
     client.set_fee_config(&admin, &9000u32, &1000u32);
 
     (env, client, admin, treasury)
@@ -29,6 +31,7 @@ fn register_creator(env: &Env, client: &CreatorKeysContractClient, creator: &Add
             creator: creator.clone(),
             handle: String::from_str(env, "alice"),
         },
+        &None,
         &None,
         &None,
         &None,
@@ -166,7 +169,7 @@ fn test_key_burn_reduces_supply_and_balance() {
     client.buy_key(&creator, &holder, &1000i128, &None);
 
     let balance_before = client.get_key_balance(&creator, &holder);
-    let supply_before = client.get_creator_supply(&creator).unwrap();
+    let supply_before = client.get_creator_supply(&creator);
     assert_eq!(balance_before, 1);
     assert_eq!(supply_before, 1);
 
@@ -181,7 +184,7 @@ fn test_key_burn_reduces_supply_and_balance() {
     assert_eq!(new_supply, 0);
 
     let balance_after = client.get_key_balance(&creator, &holder);
-    let supply_after = client.get_creator_supply(&creator).unwrap();
+    let supply_after = client.get_creator_supply(&creator);
     assert_eq!(balance_after, 0);
     assert_eq!(supply_after, 0);
 }
