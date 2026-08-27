@@ -98,6 +98,8 @@ pub enum ContractError {
     NothingToClaim = 48,
     NotWhitelisted = 49,
     CircuitBreakerTriggered = 50,
+    FrozenBalanceExceeded = 51,
+    FreezeQuantityExceedsBalance = 52,
 }
 
 pub mod fee {
@@ -433,6 +435,10 @@ pub mod constants {
 
         pub fn whitelist_entry(key_id: &Address, wallet: &Address) -> DataKey {
             DataKey::WhitelistMap(key_id.clone(), wallet.clone())
+        }
+
+        pub fn self_frozen_balance(key_id: &Address, wallet: &Address) -> DataKey {
+            DataKey::SelfFrozenBalance(key_id.clone(), wallet.clone())
         }
 
         pub fn whitelist_mode(key_id: &Address) -> DataKey {
@@ -781,6 +787,7 @@ pub enum DataKey {
     ReferralEarnings(Address),
     WhitelistMap(Address, Address),
     WhitelistMode(Address),
+    SelfFrozenBalance(Address, Address),
 }
 
 /// Time-locked key allocation for creator self-vesting.
@@ -1046,6 +1053,27 @@ pub fn read_registered_creator_profile(
 /// missing-balance behavior consistent across the contract.
 pub fn read_key_balance(env: &Env, creator: &Address) -> u32 {
     read_creator_supply(env, creator)
+}
+
+fn read_self_frozen_balance(env: &Env, key_id: &Address, wallet: &Address) -> u32 {
+    env.storage()
+        .persistent()
+        .get(&constants::storage::self_frozen_balance(key_id, wallet))
+        .unwrap_or(0)
+}
+
+fn available_holder_balance(env: &Env, key_id: &Address, wallet: &Address) -> u32 {
+    let total = env
+        .storage()
+        .persistent()
+        .get(&constants::storage::holder_balance_key(key_id, wallet))
+        .unwrap_or(0u32);
+    let staked = env
+        .storage()
+        .persistent()
+        .get(&constants::storage::staked_balance(key_id, wallet))
+        .unwrap_or(0u32);
+    total.saturating_sub(staked).saturating_sub(read_self_frozen_balance(env, key_id, wallet))
 }
 
 /// Reads a creator's current key supply from persistent storage.
@@ -2420,7 +2448,11 @@ impl CreatorKeysContract {
             .persistent()
             .get(&staked_balance_key)
             .unwrap_or(0);
-        let liquid_balance = current_balance.saturating_sub(staked_balance);
+        let liquid_balance = current_balance
+            .saturating_sub(staked_balance)
+            .saturating_sub(read_self_frozen_balance(
+            &env, &creator, &seller,
+        ));
 
         if liquid_balance == 0 {
             return Err(ContractError::InsufficientBalance);
@@ -2899,6 +2931,67 @@ impl CreatorKeysContract {
     /// Read-only view: returns whether `wallet` is currently blacklisted.
     pub fn is_wallet_blacklisted(env: Env, wallet: Address) -> bool {
         is_blacklisted(&env, &wallet)
+    }
+
+    /// Voluntarily removes `quantity` keys from the caller's transferable balance.
+    pub fn self_freeze(
+        env: Env,
+        key_id: Address,
+        wallet: Address,
+        quantity: u32,
+    ) -> Result<(), ContractError> {
+        wallet.require_auth();
+        assert_not_paused(&env)?;
+        if quantity == 0 {
+            return Err(ContractError::NotPositiveAmount);
+        }
+        let available = available_holder_balance(&env, &key_id, &wallet);
+        if available < quantity {
+            return Err(ContractError::FreezeQuantityExceedsBalance);
+        }
+        let key = constants::storage::self_frozen_balance(&key_id, &wallet);
+        let frozen = read_self_frozen_balance(&env, &key_id, &wallet);
+        env.storage().persistent().set(&key, &frozen.checked_add(quantity).ok_or(ContractError::Overflow)?);
+        extend_key_ttl_to_full_window(&env, &key);
+        env.events().publish(
+            (events::SELF_FREEZE_APPLIED_EVENT_NAME, key_id.clone(), wallet.clone()),
+            events::SelfFreezeEvent { key_id, wallet, quantity },
+        );
+        Ok(())
+    }
+
+    /// Releases previously self-frozen keys for the caller.
+    pub fn self_unfreeze(
+        env: Env,
+        key_id: Address,
+        wallet: Address,
+        quantity: u32,
+    ) -> Result<(), ContractError> {
+        wallet.require_auth();
+        if quantity == 0 {
+            return Err(ContractError::NotPositiveAmount);
+        }
+        let key = constants::storage::self_frozen_balance(&key_id, &wallet);
+        let frozen = read_self_frozen_balance(&env, &key_id, &wallet);
+        if frozen < quantity {
+            return Err(ContractError::InsufficientBalance);
+        }
+        let remaining = frozen - quantity;
+        if remaining == 0 {
+            env.storage().persistent().remove(&key);
+        } else {
+            env.storage().persistent().set(&key, &remaining);
+            extend_key_ttl_to_full_window(&env, &key);
+        }
+        env.events().publish(
+            (events::SELF_FREEZE_LIFTED_EVENT_NAME, key_id.clone(), wallet.clone()),
+            events::SelfFreezeEvent { key_id, wallet, quantity },
+        );
+        Ok(())
+    }
+
+    pub fn get_self_frozen_balance(env: Env, key_id: Address, wallet: Address) -> u32 {
+        read_self_frozen_balance(&env, &key_id, &wallet)
     }
 
     pub fn get_key_balance(env: Env, creator: Address, wallet: Address) -> u32 {
@@ -4161,7 +4254,7 @@ impl CreatorKeysContract {
         // Settle dividends for sender before balance changes.
         settle_holder_dividends(&env, &creator, &from, from_balance)?;
 
-        if from_balance < amount {
+        if available_holder_balance(&env, &creator, &from) < amount {
             return Err(ContractError::InsufficientBalance);
         }
 
@@ -4899,7 +4992,7 @@ impl CreatorKeysContract {
         let balance_key = constants::storage::holder_balance_key(&key_id, &caller);
         let current_balance: u32 = env.storage().persistent().get(&balance_key).unwrap_or(0);
 
-        if current_balance < quantity {
+        if available_holder_balance(&env, &key_id, &caller) < quantity {
             return Err(ContractError::InsufficientBalance);
         }
 
