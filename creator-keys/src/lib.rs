@@ -1282,9 +1282,7 @@ fn is_valid_handle_byte(byte: u8) -> bool {
 /// Returns `None` when no metadata has been initialised for the creator.
 pub fn read_creator_metadata(env: &Env, creator: &Address) -> Option<KeyMetadata> {
     let key = constants::storage::creator_metadata(creator);
-    env.storage()
-        .persistent()
-        .get::<DataKey, KeyMetadata>(&key)
+    env.storage().persistent().get::<DataKey, KeyMetadata>(&key)
 }
 
 /// Validates the byte-length of a metadata string field.
@@ -1310,9 +1308,21 @@ fn validate_key_metadata(metadata: &KeyMetadata) -> Result<(), ContractError> {
     if metadata.name.len() == 0 {
         return Err(ContractError::DisplayNameEmpty);
     }
-    assert_metadata_field_length(&metadata.name, METADATA_NAME_MAX_LEN, ContractError::NameTooLong)?;
-    assert_metadata_field_length(&metadata.bio, METADATA_BIO_MAX_LEN, ContractError::NameTooLong)?;
-    assert_metadata_field_length(&metadata.avatar_uri, METADATA_AVATAR_URI_MAX_LEN, ContractError::NameTooLong)?;
+    assert_metadata_field_length(
+        &metadata.name,
+        METADATA_NAME_MAX_LEN,
+        ContractError::NameTooLong,
+    )?;
+    assert_metadata_field_length(
+        &metadata.bio,
+        METADATA_BIO_MAX_LEN,
+        ContractError::NameTooLong,
+    )?;
+    assert_metadata_field_length(
+        &metadata.avatar_uri,
+        METADATA_AVATAR_URI_MAX_LEN,
+        ContractError::NameTooLong,
+    )?;
     Ok(())
 }
 
@@ -2515,7 +2525,8 @@ impl CreatorKeysContract {
 
                 if referral_amount > 0 {
                     let ref_key = constants::storage::referral_earnings(&referrer_addr);
-                    let current_earnings: i128 = env.storage().persistent().get(&ref_key).unwrap_or(0);
+                    let current_earnings: i128 =
+                        env.storage().persistent().get(&ref_key).unwrap_or(0);
                     let new_earnings = current_earnings
                         .checked_add(referral_amount)
                         .ok_or(ContractError::Overflow)?;
@@ -4615,11 +4626,7 @@ impl CreatorKeysContract {
     ///
     /// Only callable by the creator. Panics with `CapAlreadySet` if a cap is
     /// already set and the new cap is lower than the current supply.
-    pub fn set_supply_cap(
-        env: Env,
-        creator: Address,
-        cap: u32,
-    ) -> Result<(), ContractError> {
+    pub fn set_supply_cap(env: Env, creator: Address, cap: u32) -> Result<(), ContractError> {
         creator.require_auth();
 
         let profile = read_registered_creator_profile(&env, &creator)?;
@@ -4694,11 +4701,7 @@ impl CreatorKeysContract {
     ///
     /// Callable by any admin in the multisig list. If this is the first
     /// proposal, it records the proposer and awaits a second approval.
-    pub fn propose_pause(
-        env: Env,
-        creator: Address,
-        caller: Address,
-    ) -> Result<(), ContractError> {
+    pub fn propose_pause(env: Env, creator: Address, caller: Address) -> Result<(), ContractError> {
         caller.require_auth();
 
         let config: MultisigAdmins = env
@@ -4745,11 +4748,7 @@ impl CreatorKeysContract {
     ///
     /// Callable by a second admin. When the approval threshold (2 of 3) is
     /// reached, the pause executes automatically and all proposals are reset.
-    pub fn approve_pause(
-        env: Env,
-        creator: Address,
-        caller: Address,
-    ) -> Result<(), ContractError> {
+    pub fn approve_pause(env: Env, creator: Address, caller: Address) -> Result<(), ContractError> {
         caller.require_auth();
 
         let config: MultisigAdmins = env
@@ -5113,9 +5112,7 @@ impl CreatorKeysContract {
 
         env.events().publish(
             events::whitelist_enabled_topics(&creator),
-            events::WhitelistEnabledEvent {
-                creator,
-            },
+            events::WhitelistEnabledEvent { creator },
         );
 
         Ok(())
@@ -5134,9 +5131,7 @@ impl CreatorKeysContract {
 
         env.events().publish(
             events::whitelist_disabled_topics(&creator),
-            events::WhitelistDisabledEvent {
-                creator,
-            },
+            events::WhitelistDisabledEvent { creator },
         );
 
         Ok(())
@@ -5159,10 +5154,7 @@ impl CreatorKeysContract {
 
         env.events().publish(
             events::address_whitelisted_topics(&creator),
-            events::AddressWhitelistedEvent {
-                creator,
-                address,
-            },
+            events::AddressWhitelistedEvent { creator, address },
         );
 
         Ok(())
@@ -5185,10 +5177,7 @@ impl CreatorKeysContract {
 
         env.events().publish(
             events::address_removed_topics(&creator),
-            events::AddressRemovedEvent {
-                creator,
-                address,
-            },
+            events::AddressRemovedEvent { creator, address },
         );
 
         Ok(())
@@ -5228,10 +5217,7 @@ impl CreatorKeysContract {
             .ok_or(ContractError::Overflow)?;
 
         if current_balance > 0 && new_balance == 0 {
-            profile.holder_count = profile
-                .holder_count
-                .checked_sub(1)
-                .unwrap_or(0);
+            profile.holder_count = profile.holder_count.checked_sub(1).unwrap_or(0);
         }
 
         profile.supply = new_supply;
@@ -5270,7 +5256,10 @@ impl CreatorKeysContract {
     ) -> Option<VestingSchedule> {
         env.storage()
             .persistent()
-            .get(&constants::storage::vesting_schedule(&creator, &beneficiary))
+            .get(&constants::storage::vesting_schedule(
+                &creator,
+                &beneficiary,
+            ))
     }
 
     // =========================================================================
@@ -5295,11 +5284,7 @@ impl CreatorKeysContract {
         const TIMELOCK_DELAY_LEDGERS: u32 = 34_560;
 
         let next_id_key = DataKey::TimelockNextId;
-        let proposal_id: u32 = env
-            .storage()
-            .persistent()
-            .get(&next_id_key)
-            .unwrap_or(1u32);
+        let proposal_id: u32 = env.storage().persistent().get(&next_id_key).unwrap_or(1u32);
 
         let current_ledger = env.ledger().sequence();
         let execution_not_before = current_ledger
@@ -5417,10 +5402,7 @@ impl CreatorKeysContract {
     }
 
     /// Read-only view: returns a timelock proposal by ID.
-    pub fn get_timelock_proposal(
-        env: Env,
-        proposal_id: u32,
-    ) -> Option<TimelockProposal> {
+    pub fn get_timelock_proposal(env: Env, proposal_id: u32) -> Option<TimelockProposal> {
         env.storage()
             .persistent()
             .get(&DataKey::TimelockProposal(proposal_id))
@@ -5614,15 +5596,19 @@ impl CreatorKeysContract {
         creator.require_auth();
         assert_not_paused(&env)?;
 
-        let mut metadata = read_creator_metadata(&env, &creator)
-            .ok_or(ContractError::KeyNotInitialised)?;
+        let mut metadata =
+            read_creator_metadata(&env, &creator).ok_or(ContractError::KeyNotInitialised)?;;
 
         let mut name_changed = false;
         let mut bio_changed = false;
         let mut avatar_uri_changed = false;
 
         if let Some(new_name) = name {
-            assert_metadata_field_length(&new_name, METADATA_NAME_MAX_LEN, ContractError::NameTooLong)?;
+            assert_metadata_field_length(
+                &new_name,
+                METADATA_NAME_MAX_LEN,
+                ContractError::NameTooLong,
+            )?;;
             if new_name != metadata.name {
                 metadata.name = new_name;
                 name_changed = true;
@@ -5630,7 +5616,11 @@ impl CreatorKeysContract {
         }
 
         if let Some(new_bio) = bio {
-            assert_metadata_field_length(&new_bio, METADATA_BIO_MAX_LEN, ContractError::NameTooLong)?;
+            assert_metadata_field_length(
+                &new_bio,
+                METADATA_BIO_MAX_LEN,
+                ContractError::NameTooLong,
+            )?;;
             if new_bio != metadata.bio {
                 metadata.bio = new_bio;
                 bio_changed = true;
@@ -5638,7 +5628,11 @@ impl CreatorKeysContract {
         }
 
         if let Some(new_avatar_uri) = avatar_uri {
-            assert_metadata_field_length(&new_avatar_uri, METADATA_AVATAR_URI_MAX_LEN, ContractError::NameTooLong)?;
+            assert_metadata_field_length(
+                &new_avatar_uri,
+                METADATA_AVATAR_URI_MAX_LEN,
+                ContractError::NameTooLong,
+            )?;;
             if new_avatar_uri != metadata.avatar_uri {
                 metadata.avatar_uri = new_avatar_uri;
                 avatar_uri_changed = true;

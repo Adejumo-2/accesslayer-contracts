@@ -5,10 +5,7 @@ use crate::{
     RegisterCreatorParams, METADATA_AVATAR_URI_MAX_LEN, METADATA_BIO_MAX_LEN,
     METADATA_NAME_MAX_LEN,
 };
-use soroban_sdk::{
-    testutils::Address as _,
-    Address, Env, String,
-};
+use soroban_sdk::{testutils::Address as _, Address, Env, String};
 
 fn setup_test() -> (Env, CreatorKeysContractClient<'static>, Address, Address) {
     let env = Env::default();
@@ -72,10 +69,17 @@ fn test_referral_system_fee_split_and_validation() {
     let referrer = Address::generate(&env);
 
     // Buyer or creator as referrer panics with InvalidReferrer
-    let res_buyer_ref = client.try_buy_key_with_referrer(&creator, &buyer, &1000i128, &None, &Some(buyer.clone()));
+    let res_buyer_ref =
+        client.try_buy_key_with_referrer(&creator, &buyer, &1000i128, &None, &Some(buyer.clone()));
     assert_eq!(res_buyer_ref, Err(Ok(ContractError::InvalidReferrer)));
 
-    let res_creator_ref = client.try_buy_key_with_referrer(&creator, &buyer, &1000i128, &None, &Some(creator.clone()));
+    let res_creator_ref = client.try_buy_key_with_referrer(
+        &creator,
+        &buyer,
+        &1000i128,
+        &None,
+        &Some(creator.clone()),
+    );
     assert_eq!(res_creator_ref, Err(Ok(ContractError::InvalidReferrer)));
 
     // Valid referral buy
@@ -302,7 +306,10 @@ fn test_update_metadata_updates_provided_fields() {
     let stored = client.get_key_metadata(&creator).unwrap();
     assert_eq!(stored.name, String::from_str(&env, "Alice"));
     assert_eq!(stored.bio, String::from_str(&env, "New bio"));
-    assert_eq!(stored.avatar_uri, String::from_str(&env, "https://example.com/new.png"));
+    assert_eq!(
+        stored.avatar_uri,
+        String::from_str(&env, "https://example.com/new.png")
+    );
 }
 
 #[test]
