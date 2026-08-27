@@ -5597,7 +5597,7 @@ impl CreatorKeysContract {
         assert_not_paused(&env)?;
 
         let mut metadata =
-            read_creator_metadata(&env, &creator).ok_or(ContractError::KeyNotInitialised)?;;
+            read_creator_metadata(&env, &creator).ok_or(ContractError::KeyNotInitialised)?;
 
         let mut name_changed = false;
         let mut bio_changed = false;
@@ -5608,7 +5608,7 @@ impl CreatorKeysContract {
                 &new_name,
                 METADATA_NAME_MAX_LEN,
                 ContractError::NameTooLong,
-            )?;;
+            )?;
             if new_name != metadata.name {
                 metadata.name = new_name;
                 name_changed = true;
@@ -5620,7 +5620,7 @@ impl CreatorKeysContract {
                 &new_bio,
                 METADATA_BIO_MAX_LEN,
                 ContractError::NameTooLong,
-            )?;;
+            )?;
             if new_bio != metadata.bio {
                 metadata.bio = new_bio;
                 bio_changed = true;
@@ -5632,7 +5632,7 @@ impl CreatorKeysContract {
                 &new_avatar_uri,
                 METADATA_AVATAR_URI_MAX_LEN,
                 ContractError::NameTooLong,
-            )?;;
+            )?;
             if new_avatar_uri != metadata.avatar_uri {
                 metadata.avatar_uri = new_avatar_uri;
                 avatar_uri_changed = true;
