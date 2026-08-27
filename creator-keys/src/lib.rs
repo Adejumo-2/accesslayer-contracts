@@ -99,6 +99,8 @@ pub enum ContractError {
     NotWhitelisted = 49,
     CircuitBreakerTriggered = 50,
     GlobalTradingHalted = 51,
+    KeyNotInitialised = 52,
+    NameTooLong = 53,
 }
 
 pub mod fee {
@@ -455,6 +457,10 @@ pub mod constants {
             DataKey::WhitelistMode(key_id.clone())
         }
 
+        pub fn creator_metadata(creator: &Address) -> DataKey {
+            DataKey::CreatorMetadata(creator.clone())
+        }
+
         pub fn vesting_claimed(creator: &Address, beneficiary: &Address) -> DataKey {
             DataKey::VestingClaimed(creator.clone(), beneficiary.clone())
         }
@@ -690,6 +696,15 @@ pub fn assert_schema_version(client_version: u32) -> Result<(), ContractError> {
 
 pub const HANDLE_LEN_MIN: u32 = 3;
 pub const HANDLE_LEN_MAX: u32 = 32;
+
+/// Maximum byte-length of the `name` field in [`KeyMetadata`].
+pub const METADATA_NAME_MAX_LEN: u32 = 64;
+
+/// Maximum byte-length of the `bio` field in [`KeyMetadata`].
+pub const METADATA_BIO_MAX_LEN: u32 = 256;
+
+/// Maximum byte-length of the `avatar_uri` field in [`KeyMetadata`].
+pub const METADATA_AVATAR_URI_MAX_LEN: u32 = 256;
 pub const MAX_WHITELIST_SIZE: u32 = 500;
 
 /// Maximum number of recipient entries accepted by a single
@@ -806,6 +821,8 @@ pub enum DataKey {
     GlobalPauseVote(Address),
     /// A pending `global_resume` vote cast by the given admin.
     GlobalResumeVote(Address),
+    /// Creator key metadata (display name, bio, avatar URI).
+    CreatorMetadata(Address),
 }
 
 /// Time-locked key allocation for creator self-vesting.
@@ -956,6 +973,21 @@ pub struct CreatorProfile {
 pub struct ClaimResult {
     pub creator: Address,
     pub amount_claimed: i128,
+}
+
+/// Metadata associated with a creator key that can be set at initialisation
+/// and updated later via [`update_metadata`].
+///
+/// Only fields wrapped in `Some` are updated; `None` fields are left unchanged.
+/// Byte-length limits mirror the handle validation enforced by
+/// [`validate_creator_handle`] for `name` and use dedicated caps for `bio`
+/// and `avatar_uri`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct KeyMetadata {
+    pub name: String,
+    pub bio: String,
+    pub avatar_uri: String,
 }
 
 /// One recipient of a creator key airdrop: the wallet to credit and how many
@@ -1243,6 +1275,52 @@ fn credit_creator_fee(env: &Env, creator: &Address, amount: i128) -> Result<(), 
 
 fn is_valid_handle_byte(byte: u8) -> bool {
     byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'
+}
+
+/// Reads creator key metadata from persistent storage.
+///
+/// Returns `None` when no metadata has been initialised for the creator.
+pub fn read_creator_metadata(env: &Env, creator: &Address) -> Option<KeyMetadata> {
+    let key = constants::storage::creator_metadata(creator);
+    env.storage()
+        .persistent()
+        .get::<DataKey, KeyMetadata>(&key)
+}
+
+/// Validates the byte-length of a metadata string field.
+///
+/// Returns [`ContractError::NameTooLong`] when `value.len()` exceeds `max_len`.
+fn assert_metadata_field_length(
+    value: &String,
+    max_len: u32,
+    error: ContractError,
+) -> Result<(), ContractError> {
+    if value.len() > max_len {
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Validates a complete [`KeyMetadata`] payload.
+///
+/// Rejects an empty `name` (blank or whitespace-only) with
+/// [`ContractError::DisplayNameEmpty`] and enforces per-field byte-length
+/// limits consistent with the handle rules used at registration.
+fn validate_key_metadata(metadata: &KeyMetadata) -> Result<(), ContractError> {
+    if metadata.name.len() == 0 {
+        return Err(ContractError::DisplayNameEmpty);
+    }
+    assert_metadata_field_length(&metadata.name, METADATA_NAME_MAX_LEN, ContractError::NameTooLong)?;
+    assert_metadata_field_length(&metadata.bio, METADATA_BIO_MAX_LEN, ContractError::NameTooLong)?;
+    assert_metadata_field_length(&metadata.avatar_uri, METADATA_AVATAR_URI_MAX_LEN, ContractError::NameTooLong)?;
+    Ok(())
+}
+
+/// Writes creator key metadata to persistent storage.
+fn write_creator_metadata(env: &Env, creator: &Address, metadata: &KeyMetadata) {
+    let key = constants::storage::creator_metadata(creator);
+    env.storage().persistent().set(&key, metadata);
+    extend_key_ttl_to_full_window(env, &key);
 }
 
 /// Validates a creator's display handle.
@@ -5466,6 +5544,131 @@ impl CreatorKeysContract {
         env.storage()
             .persistent()
             .get(&DataKey::VoteSnapshot(creator_id, poll_id, voter))
+    }
+
+    // =========================================================================
+    // #780 — Key metadata initialisation and update
+    // =========================================================================
+
+    /// Initialises the key metadata for a registered creator.
+    ///
+    /// Callable only by the creator (`require_auth`). Stores the provided
+    /// [`KeyMetadata`] in persistent storage under [`DataKey::CreatorMetadata`].
+    /// The `name` field must not be empty and must not exceed
+    /// [`METADATA_NAME_MAX_LEN`] bytes. The `bio` and `avatar_uri` fields are
+    /// validated against [`METADATA_BIO_MAX_LEN`] and
+    /// [`METADATA_AVATAR_URI_MAX_LEN`] respectively.
+    ///
+    /// Panics with [`ContractError::AlreadyRegistered`] if metadata has already
+    /// been initialised for this creator.
+    ///
+    /// Panics with [`ContractError::NotRegistered`] if the creator address
+    /// has not been registered via [`register_creator`].
+    pub fn initialise_key(
+        env: Env,
+        creator: Address,
+        metadata: KeyMetadata,
+    ) -> Result<(), ContractError> {
+        creator.require_auth();
+        assert_not_paused(&env)?;
+
+        // Verify creator is registered
+        let _profile = read_registered_creator_profile(&env, &creator)?;
+
+        // Ensure metadata has not already been initialised
+        let existing = read_creator_metadata(&env, &creator);
+        if existing.is_some() {
+            return Err(ContractError::AlreadyRegistered);
+        }
+
+        validate_key_metadata(&metadata)?;
+        write_creator_metadata(&env, &creator, &metadata);
+
+        Ok(())
+    }
+
+    /// Updates the key metadata for a creator.
+    ///
+    /// Callable only by the creator (`require_auth`). For each field wrapped in
+    /// `Some`, the stored value is overwritten; `None` fields are left unchanged.
+    ///
+    /// # Errors
+    ///
+    /// - [`ContractError::KeyNotInitialised`] — metadata has not been set via
+    ///   [`initialise_key`] for this `creator`.
+    /// - [`ContractError::NameTooLong`] — the provided `name` exceeds
+    ///   [`METADATA_NAME_MAX_LEN`] bytes.
+    /// - [`ContractError::Unauthorized`] — the caller is not the key creator.
+    ///
+    /// # Events
+    ///
+    /// Emits a [`events::METADATA_UPDATED_EVENT_NAME`] event listing only the
+    /// fields that were changed.
+    pub fn update_metadata(
+        env: Env,
+        creator: Address,
+        name: Option<String>,
+        bio: Option<String>,
+        avatar_uri: Option<String>,
+    ) -> Result<(), ContractError> {
+        creator.require_auth();
+        assert_not_paused(&env)?;
+
+        let mut metadata = read_creator_metadata(&env, &creator)
+            .ok_or(ContractError::KeyNotInitialised)?;
+
+        let mut name_changed = false;
+        let mut bio_changed = false;
+        let mut avatar_uri_changed = false;
+
+        if let Some(new_name) = name {
+            assert_metadata_field_length(&new_name, METADATA_NAME_MAX_LEN, ContractError::NameTooLong)?;
+            if new_name != metadata.name {
+                metadata.name = new_name;
+                name_changed = true;
+            }
+        }
+
+        if let Some(new_bio) = bio {
+            assert_metadata_field_length(&new_bio, METADATA_BIO_MAX_LEN, ContractError::NameTooLong)?;
+            if new_bio != metadata.bio {
+                metadata.bio = new_bio;
+                bio_changed = true;
+            }
+        }
+
+        if let Some(new_avatar_uri) = avatar_uri {
+            assert_metadata_field_length(&new_avatar_uri, METADATA_AVATAR_URI_MAX_LEN, ContractError::NameTooLong)?;
+            if new_avatar_uri != metadata.avatar_uri {
+                metadata.avatar_uri = new_avatar_uri;
+                avatar_uri_changed = true;
+            }
+        }
+
+        if !name_changed && !bio_changed && !avatar_uri_changed {
+            return Ok(());
+        }
+
+        write_creator_metadata(&env, &creator, &metadata);
+
+        env.events().publish(
+            events::metadata_updated_topics(&creator),
+            events::MetadataUpdatedEvent {
+                creator,
+                name_changed,
+                bio_changed,
+                avatar_uri_changed,
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Read-only view: returns the key metadata for a creator.
+    ///
+    /// Returns `None` if metadata has not been initialised.
+    pub fn get_key_metadata(env: Env, creator: Address) -> Option<KeyMetadata> {
+        read_creator_metadata(&env, &creator)
     }
 }
 #[cfg(test)]

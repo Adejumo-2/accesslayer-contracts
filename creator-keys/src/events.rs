@@ -1028,3 +1028,24 @@ pub struct RoyaltyUpdatedEvent {
 pub fn royalty_updated_topics(creator: &Address) -> (Symbol, Address) {
     (ROYALTY_UPDATED_EVENT_NAME, creator.clone())
 }
+
+/// Event name for key metadata update.
+pub const METADATA_UPDATED_EVENT_NAME: Symbol = symbol_short!("md_upd");
+
+/// Stable metadata updated event payload for downstream indexers.
+///
+/// Emitted by [`CreatorKeysContract::update_metadata`] listing only the
+/// fields that were actually changed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct MetadataUpdatedEvent {
+    pub creator: Address,
+    pub name_changed: bool,
+    pub bio_changed: bool,
+    pub avatar_uri_changed: bool,
+}
+
+/// Shared metadata updated event topics tuple.
+pub fn metadata_updated_topics(creator: &Address) -> (Symbol, Address) {
+    (METADATA_UPDATED_EVENT_NAME, creator.clone())
+}
