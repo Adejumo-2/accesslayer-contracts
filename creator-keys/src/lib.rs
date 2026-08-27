@@ -328,6 +328,8 @@ pub mod constants {
         pub const TREASURY_BALANCE: DataKey = DataKey::TreasuryBalance;
         pub const RETENTION_POLICY: DataKey = DataKey::RetentionPolicy;
         pub const GLOBAL_DEADLINE_LEDGER: DataKey = DataKey::GlobalDeadlineLedger;
+        pub const PROTOCOL_FEE_BPS: DataKey = DataKey::ProtocolFeeBps;
+        pub const LOCKUP_DURATION_SECS: DataKey = DataKey::LockupDurationSecs;
 
         pub fn curve_preset(creator: &Address) -> DataKey {
             DataKey::CurvePreset(creator.clone())
@@ -596,6 +598,38 @@ pub mod ttl {
         current_ttl < threshold
     }
 }
+
+/// Minimum TTL extension (in ledgers) applied to persistent storage entries.
+///
+/// Roughly 30 days at 5 seconds per ledger. [`bump_persistent_ttl`] guarantees
+/// that every entry it touches keeps at least this much remaining lifetime, so
+/// actively read or written state never expires unexpectedly.
+pub const TTL_MIN_EXTENSION_LEDGERS: u32 = 518_400;
+
+/// Default protocol trade fee in basis points (100 = 1%).
+///
+/// Applied to every buy and sell once the trade fee is configured via
+/// `set_protocol_fee`; the admin can override it with an explicit value.
+pub const DEFAULT_PROTOCOL_FEE_BPS: u32 = 100;
+
+/// Default per-holder holding cap in basis points (1000 = 10% of supply).
+///
+/// Applied when a creator enables the holding cap via `set_holder_cap` without
+/// requesting a custom percentage; explicit values must fall between
+/// [`HOLDER_CAP_MIN_BPS`] and [`HOLDER_CAP_MAX_BPS`].
+pub const DEFAULT_HOLDER_CAP_BPS: u32 = 1000;
+
+/// Minimum configurable holding cap in basis points (1%).
+pub const HOLDER_CAP_MIN_BPS: u32 = 100;
+
+/// Maximum configurable holding cap in basis points (25%).
+pub const HOLDER_CAP_MAX_BPS: u32 = 2500;
+
+/// Default sell lockup duration in seconds (24 hours).
+///
+/// Enforced once configured via `set_lockup_duration`: a holder cannot sell
+/// keys until at least this much time has elapsed since their most recent buy.
+pub const DEFAULT_LOCKUP_DURATION_SECS: u64 = 86_400;
 
 /// Current client-facing schema version of this contract.
 ///
@@ -1079,6 +1113,7 @@ fn credit_creator_fee_recipient_balance(
     let current = read_creator_fee_recipient_balance(env, creator);
     let updated = current.checked_add(amount).ok_or(ContractError::Overflow)?;
     env.storage().persistent().set(&key, &updated);
+    extend_key_ttl_to_full_window(env, &key);
     Ok(())
 }
 
@@ -1116,6 +1151,7 @@ fn credit_co_creator_fee_balance(
     let current = read_co_creator_fee_balance(env, creator, co_creator);
     let updated = current.checked_add(amount).ok_or(ContractError::Overflow)?;
     env.storage().persistent().set(&key, &updated);
+    extend_key_ttl_to_full_window(env, &key);
     Ok(())
 }
 
@@ -1302,6 +1338,7 @@ fn credit_protocol_fee_recipient_balance(env: &Env, amount: i128) -> Result<(), 
         &constants::storage::PROTOCOL_FEE_RECIPIENT_BALANCE,
         &updated,
     );
+    extend_key_ttl_to_full_window(env, &constants::storage::PROTOCOL_FEE_RECIPIENT_BALANCE);
     Ok(())
 }
 
@@ -1324,7 +1361,73 @@ fn credit_treasury_balance(env: &Env, amount: i128) -> Result<(), ContractError>
     env.storage()
         .persistent()
         .set(&constants::storage::TREASURY_BALANCE, &updated);
+    extend_key_ttl_to_full_window(env, &constants::storage::TREASURY_BALANCE);
     Ok(())
+}
+
+/// Reads the protocol trade fee configuration set via `set_protocol_fee`.
+///
+/// Returns `None` until both the fee rate and the treasury address have been
+/// configured, so the trade fee stays dormant on deployments that never opt in.
+fn read_trade_fee_config(env: &Env) -> Option<(u32, Address)> {
+    let fee_bps: u32 = env
+        .storage()
+        .persistent()
+        .get(&constants::storage::PROTOCOL_FEE_BPS)?;
+    let treasury: Address = env
+        .storage()
+        .persistent()
+        .get(&constants::storage::TREASURY_ADDRESS)?;
+    Some((fee_bps, treasury))
+}
+
+/// Pure computation of the protocol trade fee owed on `amount`.
+///
+/// Returns `0` when the trade fee is not configured, the rate is zero, or the
+/// amount is non-positive. Mirrors the deduction performed by
+/// [`collect_protocol_trade_fee`] so slippage and quote math stay consistent.
+fn compute_trade_fee(env: &Env, amount: i128) -> Result<i128, ContractError> {
+    let Some((fee_bps, _)) = read_trade_fee_config(env) else {
+        return Ok(0);
+    };
+    if fee_bps == 0 {
+        return Ok(0);
+    }
+    fee::apply_percentage_fee(amount, fee_bps).ok_or(ContractError::Overflow)
+}
+
+/// Deducts the protocol trade fee from `amount`, credits it to the protocol
+/// treasury balance and emits a [`events::FEE_COLLECTED_EVENT_NAME`] event.
+///
+/// Returns the net remainder that flows into the creator/seller payout math.
+/// With a rate of 0 bps no treasury credit or event is produced and the full
+/// amount is returned unchanged.
+fn collect_protocol_trade_fee(env: &Env, amount: i128) -> Result<i128, ContractError> {
+    let trade_fee = compute_trade_fee(env, amount)?;
+    if trade_fee == 0 {
+        return Ok(amount);
+    }
+    let (_, treasury) = read_trade_fee_config(env).ok_or(ContractError::FeeConfigNotSet)?;
+    credit_treasury_balance(env, trade_fee)?;
+    env.events().publish(
+        events::fee_collected_topics(&treasury),
+        events::FeeCollectedEvent {
+            treasury: treasury.clone(),
+            amount: trade_fee,
+            ledger: env.ledger().sequence(),
+        },
+    );
+    fee::checked_sub_i128(amount, trade_fee).ok_or(ContractError::Overflow)
+}
+
+/// Reads the configured sell lockup duration in seconds.
+///
+/// Returns `None` until `set_lockup_duration` has been called, so sells are
+/// never time-gated on deployments that do not opt in to the lockup.
+fn read_lockup_duration_secs(env: &Env) -> Option<u64> {
+    env.storage()
+        .persistent()
+        .get(&constants::storage::LOCKUP_DURATION_SECS)
 }
 
 /// Archive retention configuration module with canonical defaults.
@@ -1381,10 +1484,14 @@ fn assert_buyback_total_cost_slippage(
 }
 
 fn compute_sell_proceeds(env: &Env, price: i128) -> Result<i128, ContractError> {
+    // The protocol trade fee is deducted before the creator/seller split, so
+    // proceeds are computed on the net amount to mirror the sell execution path.
+    let trade_fee = compute_trade_fee(env, price)?;
+    let net_price = fee::checked_sub_i128(price, trade_fee).ok_or(ContractError::Overflow)?;
     let (creator_fee, protocol_fee) =
-        CreatorKeysContract::compute_fees_for_payment(env.clone(), price)?;
+        CreatorKeysContract::compute_fees_for_payment(env.clone(), net_price)?;
     let fees = fee::checked_fee_sum(creator_fee, protocol_fee).ok_or(ContractError::Overflow)?;
-    fee::checked_sub_i128(price, fees).ok_or(ContractError::SellUnderflow)
+    fee::checked_sub_i128(net_price, fees).ok_or(ContractError::SellUnderflow)
 }
 
 fn assert_sell_proceeds_slippage(
@@ -1402,12 +1509,18 @@ fn assert_sell_proceeds_slippage(
 }
 
 fn accrue_sell_trade_fees(env: &Env, creator: &Address, price: i128) -> Result<(), ContractError> {
+    // Deduct the protocol trade fee first so the treasury is paid before the
+    // creator/seller split is computed on the remainder.
+    let net_price = collect_protocol_trade_fee(env, price)?;
+
     if read_protocol_fee_config(env).is_none() {
         return Ok(());
     }
 
+    bump_persistent_ttl(env, &constants::storage::FEE_CONFIG);
+
     let (creator_fee, protocol_fee) =
-        CreatorKeysContract::compute_fees_for_payment(env.clone(), price)?;
+        CreatorKeysContract::compute_fees_for_payment(env.clone(), net_price)?;
     credit_creator_fee(env, creator, creator_fee)?;
     credit_treasury_balance(env, protocol_fee)?;
 
@@ -1638,6 +1751,21 @@ fn extend_key_ttl_to_full_window(env: &Env, key: &DataKey) {
     env.storage()
         .persistent()
         .extend_ttl(key, CREATOR_TTL_LEDGERS, CREATOR_TTL_LEDGERS);
+}
+
+/// Extends the TTL of a persistent storage entry to at least
+/// [`TTL_MIN_EXTENSION_LEDGERS`] (~30 days) from the current ledger.
+///
+/// Called after reads and writes on persistent entries that are not already
+/// covered by the full-window extension, so actively used state never sits
+/// closer to expiry than the 30-day floor. Extending an entry that does not
+/// exist is a runtime no-op.
+fn bump_persistent_ttl(env: &Env, key: &DataKey) {
+    env.storage().persistent().extend_ttl(
+        key,
+        TTL_MIN_EXTENSION_LEDGERS,
+        TTL_MIN_EXTENSION_LEDGERS,
+    );
 }
 
 /// Extends TTL for all creator-related storage keys.
@@ -1967,6 +2095,8 @@ impl CreatorKeysContract {
             .persistent()
             .get(&constants::storage::KEY_PRICE)
             .ok_or(ContractError::KeyPriceNotSet)?;
+        // The price entry is read on every trade; keep it well clear of expiry.
+        bump_persistent_ttl(&env, &constants::storage::KEY_PRICE);
 
         let mut profile: CreatorProfile = read_registered_creator_profile(&env, &creator)?;
         assert_whitelist_allows_buy(&env, &profile, &buyer)?;
@@ -2040,6 +2170,32 @@ impl CreatorKeysContract {
             }
         }
 
+        // Check the per-creator percentage holding cap. Once a creator enables
+        // a cap via `set_holder_cap`, no single non-creator wallet may hold more
+        // than that share of the supply. The creator's own wallet is exempt.
+        if buyer != creator {
+            if let Some(cap_bps) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, u32>(&constants::storage::holder_cap_bps(&creator))
+            {
+                let post_buy_supply = profile
+                    .supply
+                    .checked_add(1)
+                    .ok_or(ContractError::Overflow)?;
+                let post_buy_balance = current_balance
+                    .checked_add(1)
+                    .ok_or(ContractError::Overflow)?;
+                // cap_bps <= HOLDER_CAP_MAX_BPS (< BPS_MAX), so the product
+                // cannot overflow i128 and the result never exceeds supply.
+                let max_allowed = ((i128::from(post_buy_supply) * i128::from(cap_bps))
+                    / i128::from(fee::BPS_MAX)) as u32;
+                if post_buy_balance > max_allowed {
+                    return Err(ContractError::MaxHoldingExceeded);
+                }
+            }
+        }
+
         // Settle dividends before balance changes so earnings are captured at old balance.
         settle_holder_dividends(&env, &creator, &buyer, current_balance)?;
 
@@ -2071,9 +2227,21 @@ impl CreatorKeysContract {
         // survive the same horizon as creator state between trades.
         extend_key_ttl_to_full_window(&env, &balance_key);
 
+        // Record the purchase time on the holder's entry so sells can enforce
+        // the anti-flash-trade lockup window.
+        let last_buy_key = constants::storage::last_buy_timestamp(&creator, &buyer);
+        env.storage()
+            .persistent()
+            .set(&last_buy_key, &env.ledger().timestamp());
+        extend_key_ttl_to_full_window(&env, &last_buy_key);
+
+        // Deduct the protocol trade fee before computing the creator payout so
+        // the fee collector is paid ahead of every other participant.
+        let net_amount = collect_protocol_trade_fee(&env, price)?;
+
         if let Some(config) = read_protocol_fee_config(&env) {
             let (creator_fee, protocol_fee) =
-                fee::checked_compute_fee_split(price, config.creator_bps, config.protocol_bps)
+                fee::checked_compute_fee_split(net_amount, config.creator_bps, config.protocol_bps)
                     .ok_or(ContractError::Overflow)?;
 
             credit_creator_fee(&env, &creator, creator_fee)?;
@@ -2178,11 +2346,43 @@ impl CreatorKeysContract {
             return Err(ContractError::InsufficientBalance);
         }
 
+        // Enforce the anti-flash-trade lockup: once a lockup duration is
+        // configured, a holder cannot sell until the configured time has
+        // elapsed since their most recent buy for this creator.
+        if let Some(lockup_secs) = read_lockup_duration_secs(&env) {
+            let last_buy_key = constants::storage::last_buy_timestamp(&creator, &seller);
+            if let Some(last_buy_ts) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, u64>(&last_buy_key)
+            {
+                let now = env.ledger().timestamp();
+                let unlock_at = last_buy_ts
+                    .checked_add(lockup_secs)
+                    .ok_or(ContractError::Overflow)?;
+                if now < unlock_at {
+                    env.events().publish(
+                        events::lockup_blocked_topics(&creator, &seller),
+                        events::LockupBlockedEvent {
+                            creator_id: creator.clone(),
+                            seller: seller.clone(),
+                            last_buy_timestamp: last_buy_ts,
+                            unlock_at,
+                            current_timestamp: now,
+                        },
+                    );
+                    return Err(ContractError::LockupPeriodActive);
+                }
+            }
+        }
+
         let base_price: i128 = env
             .storage()
             .persistent()
             .get(&constants::storage::KEY_PRICE)
             .ok_or(ContractError::KeyPriceNotSet)?;
+        // The price entry is read on every trade; keep it well clear of expiry.
+        bump_persistent_ttl(&env, &constants::storage::KEY_PRICE);
         let sell_supply = profile
             .supply
             .checked_sub(1)
@@ -2218,8 +2418,12 @@ impl CreatorKeysContract {
         write_creator_supply(&env, &creator, profile.supply);
         if new_balance == 0 {
             env.storage().persistent().remove(&balance_key);
+            env.storage()
+                .persistent()
+                .remove(&constants::storage::last_buy_timestamp(&creator, &seller));
         } else {
             env.storage().persistent().set(&balance_key, &new_balance);
+            extend_key_ttl_to_full_window(&env, &balance_key);
         }
         accrue_sell_trade_fees(&env, &creator, price)?;
 
@@ -2551,10 +2755,12 @@ impl CreatorKeysContract {
         assert_is_admin(&env, &admin)?;
 
         match deadline_ledger {
-            Some(deadline) => env
-                .storage()
-                .persistent()
-                .set(&constants::storage::GLOBAL_DEADLINE_LEDGER, &deadline),
+            Some(deadline) => {
+                env.storage()
+                    .persistent()
+                    .set(&constants::storage::GLOBAL_DEADLINE_LEDGER, &deadline);
+                extend_key_ttl_to_full_window(&env, &constants::storage::GLOBAL_DEADLINE_LEDGER);
+            }
             None => env
                 .storage()
                 .persistent()
@@ -2930,6 +3136,7 @@ impl CreatorKeysContract {
         env.storage()
             .persistent()
             .set(&constants::storage::FEE_CONFIG, &config);
+        extend_key_ttl_to_full_window(&env, &constants::storage::FEE_CONFIG);
 
         if is_first_init {
             let protocol_fee_recipient: Address = env
@@ -3016,6 +3223,7 @@ impl CreatorKeysContract {
         env.storage()
             .persistent()
             .set(&constants::storage::CURVE_SLOPE, &slope);
+        extend_key_ttl_to_full_window(&env, &constants::storage::CURVE_SLOPE);
         Ok(())
     }
 
@@ -3046,6 +3254,7 @@ impl CreatorKeysContract {
         env.storage()
             .persistent()
             .set(&constants::storage::TREASURY_ADDRESS, &treasury);
+        extend_key_ttl_to_full_window(&env, &constants::storage::TREASURY_ADDRESS);
     }
 
     /// Read-only view: returns the current protocol treasury address.
@@ -3057,6 +3266,60 @@ impl CreatorKeysContract {
         env.storage()
             .persistent()
             .get(&constants::storage::TREASURY_ADDRESS)
+    }
+
+    /// Configures the protocol trade fee charged on every buy and sell.
+    ///
+    /// The fee is deducted from the trade amount before the creator payout is
+    /// computed and credited to the protocol treasury balance. Both the fee
+    /// rate and the treasury address are stored in persistent storage; the fee
+    /// stays dormant until this entrypoint is called.
+    ///
+    /// Parameter validation:
+    /// - `admin`: must authorize the call (`require_auth`) and match the stored
+    ///   admin, otherwise [`ContractError::Unauthorized`].
+    /// - `fee_bps`: `None` selects [`DEFAULT_PROTOCOL_FEE_BPS`] (100 = 1%); an
+    ///   explicit value above [`fee::BPS_MAX`] returns
+    ///   [`ContractError::InvalidFeeConfig`]. A rate of 0 bps leaves trades
+    ///   fee-free and skips the treasury credit entirely.
+    /// - `treasury`: must not be the Stellar zero address, otherwise
+    ///   [`ContractError::ZeroAddress`].
+    pub fn set_protocol_fee(
+        env: Env,
+        admin: Address,
+        fee_bps: Option<u32>,
+        treasury: Address,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        assert_is_admin(&env, &admin)?;
+        validate_non_zero_address(&env, &treasury)?;
+
+        let resolved_bps = fee_bps.unwrap_or(DEFAULT_PROTOCOL_FEE_BPS);
+        if resolved_bps > fee::BPS_MAX {
+            return Err(ContractError::InvalidFeeConfig);
+        }
+
+        env.storage()
+            .persistent()
+            .set(&constants::storage::PROTOCOL_FEE_BPS, &resolved_bps);
+        extend_key_ttl_to_full_window(&env, &constants::storage::PROTOCOL_FEE_BPS);
+        env.storage()
+            .persistent()
+            .set(&constants::storage::TREASURY_ADDRESS, &treasury);
+        extend_key_ttl_to_full_window(&env, &constants::storage::TREASURY_ADDRESS);
+
+        Ok(())
+    }
+
+    /// Read-only view: returns the configured protocol trade fee.
+    ///
+    /// Returns `(fee_bps, Some(treasury))` once `set_protocol_fee` has been
+    /// called and `(0, None)` while the trade fee is dormant.
+    pub fn get_protocol_trade_fee(env: Env) -> (u32, Option<Address>) {
+        match read_trade_fee_config(&env) {
+            Some((fee_bps, treasury)) => (fee_bps, Some(treasury)),
+            None => (0, None),
+        }
     }
 
     /// Sets the protocol admin address.
@@ -3088,6 +3351,7 @@ impl CreatorKeysContract {
         env.storage()
             .persistent()
             .set(&constants::storage::ADMIN_ADDRESS, &new_admin);
+        extend_key_ttl_to_full_window(&env, &constants::storage::ADMIN_ADDRESS);
         Ok(())
     }
 
@@ -3150,6 +3414,7 @@ impl CreatorKeysContract {
         env.storage()
             .persistent()
             .set(&constants::storage::PROTOCOL_FEE_RECIPIENT, &recipient);
+        extend_key_ttl_to_full_window(&env, &constants::storage::PROTOCOL_FEE_RECIPIENT);
 
         if let Some(old) = old_recipient {
             env.events().publish(
@@ -3195,6 +3460,7 @@ impl CreatorKeysContract {
         env.storage()
             .persistent()
             .set(&constants::storage::RETENTION_POLICY, &policy);
+        extend_key_ttl_to_full_window(&env, &constants::storage::RETENTION_POLICY);
 
         Ok(())
     }
@@ -3422,6 +3688,7 @@ impl CreatorKeysContract {
         let accumulator: i128 = env.storage().persistent().get(&acc_key).unwrap_or(0);
         let new_accumulator = fee::checked_accumulate(accumulator, per_key_net)?;
         env.storage().persistent().set(&acc_key, &new_accumulator);
+        extend_key_ttl_to_full_window(&env, &acc_key);
 
         env.events().publish(
             events::dividend_distributed_topics(&creator),
@@ -3455,14 +3722,14 @@ impl CreatorKeysContract {
         }
 
         let accumulator = read_dividend_accumulator(&env, &creator);
-        env.storage().persistent().set(
-            &constants::storage::holder_dividend_pending(&creator, &holder),
-            &0i128,
-        );
-        env.storage().persistent().set(
-            &constants::storage::holder_dividend_checkpoint(&creator, &holder),
-            &accumulator,
-        );
+        let pending_key = constants::storage::holder_dividend_pending(&creator, &holder);
+        let checkpoint_key = constants::storage::holder_dividend_checkpoint(&creator, &holder);
+        env.storage().persistent().set(&pending_key, &0i128);
+        env.storage()
+            .persistent()
+            .set(&checkpoint_key, &accumulator);
+        extend_key_ttl_to_full_window(&env, &pending_key);
+        extend_key_ttl_to_full_window(&env, &checkpoint_key);
 
         env.events().publish(
             events::dividend_claimed_topics(&creator, &holder),
@@ -3495,14 +3762,15 @@ impl CreatorKeysContract {
 
             if claimable > 0 {
                 let accumulator = read_dividend_accumulator(&env, &creator);
-                env.storage().persistent().set(
-                    &constants::storage::holder_dividend_pending(&creator, &holder),
-                    &0i128,
-                );
-                env.storage().persistent().set(
-                    &constants::storage::holder_dividend_checkpoint(&creator, &holder),
-                    &accumulator,
-                );
+                let pending_key = constants::storage::holder_dividend_pending(&creator, &holder);
+                let checkpoint_key =
+                    constants::storage::holder_dividend_checkpoint(&creator, &holder);
+                env.storage().persistent().set(&pending_key, &0i128);
+                env.storage()
+                    .persistent()
+                    .set(&checkpoint_key, &accumulator);
+                extend_key_ttl_to_full_window(&env, &pending_key);
+                extend_key_ttl_to_full_window(&env, &checkpoint_key);
 
                 env.events().publish(
                     events::dividend_claimed_topics(&creator, &holder),
@@ -3679,6 +3947,78 @@ impl CreatorKeysContract {
             .get(&constants::storage::max_supply(&creator))
     }
 
+    /// Sets the maximum share of the supply a single wallet may hold for this
+    /// creator's keys.
+    ///
+    /// Only callable by the creator. `cap_bps` may be omitted to select
+    /// [`DEFAULT_HOLDER_CAP_BPS`] (10%); an explicit value must lie between
+    /// [`HOLDER_CAP_MIN_BPS`] (1%) and [`HOLDER_CAP_MAX_BPS`] (25%), otherwise
+    /// [`ContractError::InvalidHolderCap`] is returned. Once configured,
+    /// `buy_key` rejects purchases that would push a non-creator wallet above
+    /// `cap_bps` of the total supply with
+    /// [`ContractError::MaxHoldingExceeded`]. The creator's own wallet is
+    /// exempt from the cap.
+    pub fn set_holder_cap(
+        env: Env,
+        creator: Address,
+        cap_bps: Option<u32>,
+    ) -> Result<(), ContractError> {
+        creator.require_auth();
+        let resolved_bps = cap_bps.unwrap_or(DEFAULT_HOLDER_CAP_BPS);
+        if !(HOLDER_CAP_MIN_BPS..=HOLDER_CAP_MAX_BPS).contains(&resolved_bps) {
+            return Err(ContractError::InvalidHolderCap);
+        }
+        let key = constants::storage::holder_cap_bps(&creator);
+        env.storage().persistent().set(&key, &resolved_bps);
+        extend_key_ttl_to_full_window(&env, &key);
+        Ok(())
+    }
+
+    /// Read-only view: returns the holder cap basis points for a creator.
+    ///
+    /// Returns `None` while no cap is configured, meaning buys are not limited
+    /// by a percentage holding cap.
+    pub fn get_holder_cap(env: Env, creator: Address) -> Option<u32> {
+        env.storage()
+            .persistent()
+            .get(&constants::storage::holder_cap_bps(&creator))
+    }
+
+    /// Configures the sell lockup duration enforced on every sell.
+    ///
+    /// Only the protocol admin may call this. A duration of 0 returns
+    /// [`ContractError::NotPositiveAmount`]; use [`DEFAULT_LOCKUP_DURATION_SECS`]
+    /// (24 hours) as the canonical starting value. Once configured, `sell_key`
+    /// rejects sales made less than `duration_secs` after the seller's most
+    /// recent buy of that creator's keys with
+    /// [`ContractError::LockupPeriodActive`] and emits a
+    /// [`events::LOCKUP_BLOCKED_EVENT_NAME`] event.
+    pub fn set_lockup_duration(
+        env: Env,
+        admin: Address,
+        duration_secs: u64,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        assert_is_admin(&env, &admin)?;
+        if duration_secs == 0 {
+            return Err(ContractError::NotPositiveAmount);
+        }
+        env.storage()
+            .persistent()
+            .set(&constants::storage::LOCKUP_DURATION_SECS, &duration_secs);
+        extend_key_ttl_to_full_window(&env, &constants::storage::LOCKUP_DURATION_SECS);
+        Ok(())
+    }
+
+    /// Read-only view: returns the effective sell lockup duration in seconds.
+    ///
+    /// Returns [`DEFAULT_LOCKUP_DURATION_SECS`] when no duration has been
+    /// configured; note the lockup is only enforced after `set_lockup_duration`
+    /// has been called.
+    pub fn get_lockup_duration(env: Env) -> u64 {
+        read_lockup_duration_secs(&env).unwrap_or(DEFAULT_LOCKUP_DURATION_SECS)
+    }
+
     /// Read-only view: returns the curve preset for a creator.
     ///
     /// # Errors
@@ -3757,6 +4097,7 @@ impl CreatorKeysContract {
         env.storage()
             .persistent()
             .set(&from_balance_key, &new_from_balance);
+        extend_key_ttl_to_full_window(&env, &from_balance_key);
 
         // Decrement holder count if sender balance reaches zero.
         if new_from_balance == 0 {
@@ -3773,6 +4114,7 @@ impl CreatorKeysContract {
         env.storage()
             .persistent()
             .set(&to_balance_key, &new_to_balance);
+        extend_key_ttl_to_full_window(&env, &to_balance_key);
 
         // Increment holder count if recipient had zero balance before.
         if to_balance == 0 {
@@ -3847,6 +4189,7 @@ impl CreatorKeysContract {
         env.storage()
             .persistent()
             .set(&constants::storage::TREASURY_BALANCE, &remaining);
+        extend_key_ttl_to_full_window(&env, &constants::storage::TREASURY_BALANCE);
 
         env.events().publish(
             events::treasury_withdrawal_event_topics(&recipient),
@@ -3910,6 +4253,7 @@ impl CreatorKeysContract {
         env.storage()
             .persistent()
             .set(&staked_balance_key, &new_staked);
+        extend_key_ttl_to_full_window(&env, &staked_balance_key);
 
         Ok(())
     }
@@ -3961,6 +4305,7 @@ impl CreatorKeysContract {
             env.storage()
                 .persistent()
                 .set(&staked_balance_key, &new_staked);
+            extend_key_ttl_to_full_window(&env, &staked_balance_key);
         }
 
         Ok(())
