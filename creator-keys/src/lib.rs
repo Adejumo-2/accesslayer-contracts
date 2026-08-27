@@ -99,8 +99,6 @@ pub enum ContractError {
     NotWhitelisted = 49,
     CircuitBreakerTriggered = 50,
     GlobalTradingHalted = 51,
-    KeyNotInitialised = 52,
-    NameTooLong = 53,
 }
 
 pub mod fee {
@@ -1287,7 +1285,7 @@ pub fn read_creator_metadata(env: &Env, creator: &Address) -> Option<KeyMetadata
 
 /// Validates the byte-length of a metadata string field.
 ///
-/// Returns [`ContractError::NameTooLong`] when `value.len()` exceeds `max_len`.
+/// Returns [`ContractError::HandleTooLong`] when `value.len()` exceeds `max_len`.
 fn assert_metadata_field_length(
     value: &String,
     max_len: u32,
@@ -1311,17 +1309,17 @@ fn validate_key_metadata(metadata: &KeyMetadata) -> Result<(), ContractError> {
     assert_metadata_field_length(
         &metadata.name,
         METADATA_NAME_MAX_LEN,
-        ContractError::NameTooLong,
+        ContractError::HandleTooLong,
     )?;
     assert_metadata_field_length(
         &metadata.bio,
         METADATA_BIO_MAX_LEN,
-        ContractError::NameTooLong,
+        ContractError::HandleTooLong,
     )?;
     assert_metadata_field_length(
         &metadata.avatar_uri,
         METADATA_AVATAR_URI_MAX_LEN,
-        ContractError::NameTooLong,
+        ContractError::HandleTooLong,
     )?;
     Ok(())
 }
@@ -5543,9 +5541,6 @@ impl CreatorKeysContract {
     ///
     /// Panics with [`ContractError::AlreadyRegistered`] if metadata has already
     /// been initialised for this creator.
-    ///
-    /// Panics with [`ContractError::NotRegistered`] if the creator address
-    /// has not been registered via [`register_creator`].
     pub fn initialise_key(
         env: Env,
         creator: Address,
@@ -5576,9 +5571,9 @@ impl CreatorKeysContract {
     ///
     /// # Errors
     ///
-    /// - [`ContractError::KeyNotInitialised`] — metadata has not been set via
+    /// - [`ContractError::NotRegistered`] — metadata has not been set via
     ///   [`initialise_key`] for this `creator`.
-    /// - [`ContractError::NameTooLong`] — the provided `name` exceeds
+    /// - [`ContractError::HandleTooLong`] — the provided `name` exceeds
     ///   [`METADATA_NAME_MAX_LEN`] bytes.
     /// - [`ContractError::Unauthorized`] — the caller is not the key creator.
     ///
@@ -5597,7 +5592,7 @@ impl CreatorKeysContract {
         assert_not_paused(&env)?;
 
         let mut metadata =
-            read_creator_metadata(&env, &creator).ok_or(ContractError::KeyNotInitialised)?;
+            read_creator_metadata(&env, &creator).ok_or(ContractError::NotRegistered)?;
 
         let mut name_changed = false;
         let mut bio_changed = false;
@@ -5607,7 +5602,7 @@ impl CreatorKeysContract {
             assert_metadata_field_length(
                 &new_name,
                 METADATA_NAME_MAX_LEN,
-                ContractError::NameTooLong,
+                ContractError::HandleTooLong,
             )?;
             if new_name != metadata.name {
                 metadata.name = new_name;
@@ -5619,7 +5614,7 @@ impl CreatorKeysContract {
             assert_metadata_field_length(
                 &new_bio,
                 METADATA_BIO_MAX_LEN,
-                ContractError::NameTooLong,
+                ContractError::HandleTooLong,
             )?;
             if new_bio != metadata.bio {
                 metadata.bio = new_bio;
@@ -5631,7 +5626,7 @@ impl CreatorKeysContract {
             assert_metadata_field_length(
                 &new_avatar_uri,
                 METADATA_AVATAR_URI_MAX_LEN,
-                ContractError::NameTooLong,
+                ContractError::HandleTooLong,
             )?;
             if new_avatar_uri != metadata.avatar_uri {
                 metadata.avatar_uri = new_avatar_uri;

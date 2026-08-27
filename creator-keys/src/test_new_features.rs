@@ -264,7 +264,7 @@ fn test_initialise_key_panics_on_name_too_long() {
     };
 
     let result = client.try_initialise_key(&creator, &metadata);
-    assert_eq!(result, Err(Ok(ContractError::NameTooLong)));
+    assert_eq!(result, Err(Ok(ContractError::HandleTooLong)));
 }
 
 #[test]
@@ -345,7 +345,7 @@ fn test_update_metadata_panics_on_uninitialised_key() {
         &None,
         &None,
     );
-    assert_eq!(result, Err(Ok(ContractError::KeyNotInitialised)));
+    assert_eq!(result, Err(Ok(ContractError::NotRegistered)));
 }
 
 #[test]
@@ -368,7 +368,7 @@ fn test_update_metadata_panics_on_name_too_long() {
         &None,
         &None,
     );
-    assert_eq!(result, Err(Ok(ContractError::NameTooLong)));
+    assert_eq!(result, Err(Ok(ContractError::HandleTooLong)));
 }
 
 #[test]
@@ -391,7 +391,7 @@ fn test_update_metadata_panics_on_bio_too_long() {
         &Some(String::from_str(&env, &long_bio)),
         &None,
     );
-    assert_eq!(result, Err(Ok(ContractError::NameTooLong)));
+    assert_eq!(result, Err(Ok(ContractError::HandleTooLong)));
 }
 
 #[test]
@@ -414,7 +414,7 @@ fn test_update_metadata_panics_on_avatar_uri_too_long() {
         &None,
         &Some(String::from_str(&env, &long_uri)),
     );
-    assert_eq!(result, Err(Ok(ContractError::NameTooLong)));
+    assert_eq!(result, Err(Ok(ContractError::HandleTooLong)));
 }
 
 #[test]
