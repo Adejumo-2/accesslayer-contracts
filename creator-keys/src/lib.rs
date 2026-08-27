@@ -98,7 +98,6 @@ pub enum ContractError {
     NothingToClaim = 48,
     NotWhitelisted = 49,
     CircuitBreakerTriggered = 50,
-    GlobalTradingHalted = 51,
 }
 
 pub mod fee {
@@ -457,6 +456,14 @@ pub mod constants {
 
         pub fn creator_metadata(creator: &Address) -> DataKey {
             DataKey::CreatorMetadata(creator.clone())
+        }
+
+        pub fn holder_cap_bps(creator: &Address) -> DataKey {
+            DataKey::HolderCapBps(creator.clone())
+        }
+
+        pub fn last_buy_timestamp(creator: &Address, holder: &Address) -> DataKey {
+            DataKey::LastBuyTimestamp(creator.clone(), holder.clone())
         }
 
         pub fn vesting_claimed(creator: &Address, beneficiary: &Address) -> DataKey {
@@ -821,6 +828,18 @@ pub enum DataKey {
     GlobalResumeVote(Address),
     /// Creator key metadata (display name, bio, avatar URI).
     CreatorMetadata(Address),
+    /// Protocol fee basis points.
+    ProtocolFeeBps,
+    /// Sell lockup duration in seconds.
+    LockupDurationSecs,
+    /// Per-creator royalty configuration.
+    RoyaltyConfig(Address),
+    /// Per-creator bonding curve exponent.
+    CurveExponent(Address),
+    /// Per-creator holder cap basis points.
+    HolderCapBps(Address),
+    /// Per-creator-holder last buy timestamp.
+    LastBuyTimestamp(Address, Address),
 }
 
 /// Time-locked key allocation for creator self-vesting.
@@ -1398,7 +1417,7 @@ fn is_global_trading_paused(env: &Env) -> bool {
 /// the per-key pause guard so a global halt always takes precedence.
 fn assert_global_trading_not_halted(env: &Env) -> Result<(), ContractError> {
     if is_global_trading_paused(env) {
-        return Err(ContractError::GlobalTradingHalted);
+        return Err(ContractError::ProtocolPaused);
     }
     Ok(())
 }
@@ -2458,7 +2477,7 @@ impl CreatorKeysContract {
                 let max_allowed = ((i128::from(post_buy_supply) * i128::from(cap_bps))
                     / i128::from(fee::BPS_MAX)) as u32;
                 if post_buy_balance > max_allowed {
-                    return Err(ContractError::MaxHoldingExceeded);
+                    return Err(ContractError::WalletCapExceeded);
                 }
             }
         }
@@ -2648,7 +2667,7 @@ impl CreatorKeysContract {
                             current_timestamp: now,
                         },
                     );
-                    return Err(ContractError::LockupPeriodActive);
+                    return Err(ContractError::AllocationLocked);
                 }
             }
         }
@@ -4230,10 +4249,10 @@ impl CreatorKeysContract {
     /// Only callable by the creator. `cap_bps` may be omitted to select
     /// [`DEFAULT_HOLDER_CAP_BPS`] (10%); an explicit value must lie between
     /// [`HOLDER_CAP_MIN_BPS`] (1%) and [`HOLDER_CAP_MAX_BPS`] (25%), otherwise
-    /// [`ContractError::InvalidHolderCap`] is returned. Once configured,
+    /// [`ContractError::InvalidFeeConfig`] is returned. Once configured,
     /// `buy_key` rejects purchases that would push a non-creator wallet above
     /// `cap_bps` of the total supply with
-    /// [`ContractError::MaxHoldingExceeded`]. The creator's own wallet is
+    /// [`ContractError::WalletCapExceeded`]. The creator's own wallet is
     /// exempt from the cap.
     pub fn set_holder_cap(
         env: Env,
@@ -4243,7 +4262,7 @@ impl CreatorKeysContract {
         creator.require_auth();
         let resolved_bps = cap_bps.unwrap_or(DEFAULT_HOLDER_CAP_BPS);
         if !(HOLDER_CAP_MIN_BPS..=HOLDER_CAP_MAX_BPS).contains(&resolved_bps) {
-            return Err(ContractError::InvalidHolderCap);
+            return Err(ContractError::InvalidFeeConfig);
         }
         let key = constants::storage::holder_cap_bps(&creator);
         env.storage().persistent().set(&key, &resolved_bps);
@@ -4268,7 +4287,7 @@ impl CreatorKeysContract {
     /// (24 hours) as the canonical starting value. Once configured, `sell_key`
     /// rejects sales made less than `duration_secs` after the seller's most
     /// recent buy of that creator's keys with
-    /// [`ContractError::LockupPeriodActive`] and emits a
+    /// [`ContractError::AllocationLocked`] and emits a
     /// [`events::LOCKUP_BLOCKED_EVENT_NAME`] event.
     pub fn set_lockup_duration(
         env: Env,
@@ -5658,6 +5677,154 @@ impl CreatorKeysContract {
     /// Returns `None` if metadata has not been initialised.
     pub fn get_key_metadata(env: Env, creator: Address) -> Option<KeyMetadata> {
         read_creator_metadata(&env, &creator)
+    }
+
+    /// Convenience initialiser used by integration tests.
+    ///
+    /// Sets the protocol admin, treasury address and initial trade fee in one
+    /// call. Panics with `AlreadyRegistered` if the protocol fee config has
+    /// already been set (same as calling `set_fee_config` twice).
+    pub fn initialize(
+        env: Env,
+        admin: Address,
+        treasury: Address,
+        fee_bps: i128,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        assert_is_admin(&env, &admin)?;
+
+        env.storage()
+            .persistent()
+            .set(&constants::storage::ADMIN_ADDRESS, &admin);
+        env.storage()
+            .persistent()
+            .set(&constants::storage::TREASURY_ADDRESS, &treasury);
+
+        let protocol_bps = fee_bps as u32;
+        if protocol_bps > 0 {
+            let creator_bps = fee::BPS_MAX
+                .checked_sub(protocol_bps)
+                .ok_or(ContractError::InvalidFeeConfig)?;
+            fee::assert_valid_fee_bps(creator_bps, protocol_bps)?;
+            let config = fee::FeeConfig {
+                creator_bps,
+                protocol_bps,
+            };
+            env.storage()
+                .persistent()
+                .set(&constants::storage::FEE_CONFIG, &config);
+            extend_key_ttl_to_full_window(&env, &constants::storage::FEE_CONFIG);
+        }
+
+        Ok(())
+    }
+
+    /// Batch buy multiple creator keys in a single transaction.
+    pub fn batch_buy(
+        env: Env,
+        buyer: Address,
+        orders: soroban_sdk::Vec<(Address, u32)>,
+    ) -> Result<soroban_sdk::Vec<BatchBuyOrderResult>, ContractError> {
+        buyer.require_auth();
+        if orders.is_empty() {
+            return Err(ContractError::NotPositiveAmount);
+        }
+        if orders.len() > MAX_BATCH_BUY_SIZE as u32 {
+            return Err(ContractError::AirdropRecipientLimitExceeded);
+        }
+        let mut results = soroban_sdk::Vec::new(&env);
+        let base_price: i128 = env
+            .storage()
+            .persistent()
+            .get(&constants::storage::KEY_PRICE)
+            .ok_or(ContractError::KeyPriceNotSet)?;
+        for order in orders.iter() {
+            let (creator, quantity) = order;
+            let mut total_paid: i128 = 0;
+            for _ in 0..quantity {
+                let profile = read_registered_creator_profile(&env, &creator)?;
+                let price = compute_bonding_curve_price(&env, &creator, base_price, profile.supply)?;
+                let _supply = Self::buy_key(env.clone(), creator.clone(), buyer.clone(), price, None)?;
+                total_paid = total_paid.checked_add(price).ok_or(ContractError::Overflow)?;
+            }
+            results.push_back(BatchBuyOrderResult {
+                creator,
+                quantity,
+                price_paid: total_paid,
+            });
+        }
+        Ok(results)
+    }
+
+    /// Sets the royalty fee configuration for a creator.
+    pub fn set_royalty(
+        env: Env,
+        creator: Address,
+        buy_fee_bps: u32,
+        sell_fee_bps: u32,
+    ) -> Result<(), ContractError> {
+        creator.require_auth();
+        let _profile = read_registered_creator_profile(&env, &creator)?;
+
+        if buy_fee_bps > MAX_ROYALTY_BPS || sell_fee_bps > MAX_ROYALTY_BPS {
+            return Err(ContractError::InvalidFeeConfig);
+        }
+
+        let config = RoyaltyConfig {
+            buy_fee_bps,
+            sell_fee_bps,
+        };
+        env.storage()
+            .persistent()
+            .set(&constants::storage::royalty_config(&creator), &config);
+        extend_key_ttl_to_full_window(&env, &constants::storage::royalty_config(&creator));
+
+        env.events().publish(
+            events::royalty_updated_topics(&creator),
+            events::RoyaltyUpdatedEvent {
+                creator,
+                buy_fee_bps,
+                sell_fee_bps,
+                ledger: env.ledger().sequence(),
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Read-only view: returns the royalty configuration for a creator.
+    pub fn get_royalty_config(env: Env, creator: Address) -> Option<RoyaltyConfig> {
+        read_royalty_config(&env, &creator)
+    }
+
+    /// Migrates the bonding curve exponent for one or more creators.
+    pub fn migrate_curve(
+        env: Env,
+        admin: Address,
+        exponent: u32,
+        key_ids: soroban_sdk::Vec<Address>,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        assert_is_admin(&env, &admin)?;
+
+        if exponent < 1 || exponent > 5 {
+            return Err(ContractError::InvalidFeeConfig);
+        }
+
+        for creator in key_ids.iter() {
+            let _profile = read_registered_creator_profile(&env, &creator)?;
+            env.storage()
+                .persistent()
+                .set(&constants::storage::curve_exponent(&creator), &exponent);
+            extend_key_ttl_to_full_window(&env, &constants::storage::curve_exponent(&creator));
+        }
+
+        Ok(())
+    }
+
+    /// Read-only view: returns the bonding curve exponent for a creator.
+    pub fn get_curve_exponent(env: Env, creator: Address) -> Option<u32> {
+        read_curve_exponent(&env, &creator)
     }
 }
 #[cfg(test)]
