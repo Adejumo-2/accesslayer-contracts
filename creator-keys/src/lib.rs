@@ -328,8 +328,6 @@ pub mod constants {
         pub const TREASURY_BALANCE: DataKey = DataKey::TreasuryBalance;
         pub const RETENTION_POLICY: DataKey = DataKey::RetentionPolicy;
         pub const GLOBAL_DEADLINE_LEDGER: DataKey = DataKey::GlobalDeadlineLedger;
-        pub const PROTOCOL_FEE_BPS: DataKey = DataKey::ProtocolFeeBps;
-        pub const LOCKUP_DURATION_SECS: DataKey = DataKey::LockupDurationSecs;
 
         /// Protocol-wide emergency trading halt flag (#784).
         pub const GLOBAL_TRADING_PAUSED: DataKey = DataKey::GlobalTradingPaused;
@@ -414,12 +412,12 @@ pub mod constants {
             DataKey::ReferralFeeBps
         }
 
-        pub fn royalty_config(creator: &Address) -> DataKey {
-            DataKey::Creator(creator.clone())
+        pub fn royalty_config(_creator: &Address) -> soroban_sdk::Symbol {
+            soroban_sdk::symbol_short!("rlt_cfg")
         }
 
-        pub fn curve_exponent(creator: &Address) -> DataKey {
-            DataKey::Creator(creator.clone())
+        pub fn curve_exponent(_creator: &Address) -> soroban_sdk::Symbol {
+            soroban_sdk::symbol_short!("crv_exp")
         }
 
         /// Absolute live-until ledger the contract last set for `creator`'s
@@ -454,16 +452,14 @@ pub mod constants {
             DataKey::WhitelistMode(key_id.clone())
         }
 
-        pub fn creator_metadata(creator: &Address) -> DataKey {
-            DataKey::CreatorMetadata(creator.clone())
+
+
+        pub fn holder_cap_bps(_creator: &Address) -> soroban_sdk::Symbol {
+            soroban_sdk::symbol_short!("hl_cap")
         }
 
-        pub fn holder_cap_bps(creator: &Address) -> DataKey {
-            DataKey::MaxKeysPerWallet(creator.clone())
-        }
-
-        pub fn last_buy_timestamp(creator: &Address, holder: &Address) -> DataKey {
-            DataKey::KeyBalance(creator.clone(), holder.clone())
+        pub fn last_buy_timestamp(_creator: &Address, _holder: &Address) -> soroban_sdk::Symbol {
+            soroban_sdk::symbol_short!("lst_buy")
         }
 
         pub fn vesting_claimed(creator: &Address, beneficiary: &Address) -> DataKey {
@@ -1604,7 +1600,7 @@ fn read_trade_fee_config(env: &Env) -> Option<(u32, Address)> {
     let fee_bps: u32 = env
         .storage()
         .persistent()
-        .get(&constants::storage::PROTOCOL_FEE_BPS)?;
+        .get(&soroban_sdk::symbol_short!("pr_fee_bps"))?
     let treasury: Address = env
         .storage()
         .persistent()
@@ -1658,7 +1654,7 @@ fn collect_protocol_trade_fee(env: &Env, amount: i128) -> Result<i128, ContractE
 fn read_lockup_duration_secs(env: &Env) -> Option<u64> {
     env.storage()
         .persistent()
-        .get(&constants::storage::LOCKUP_DURATION_SECS)
+        .get(&soroban_sdk::symbol_short!("lck_dur"))
 }
 
 /// Archive retention configuration module with canonical defaults.
@@ -2019,7 +2015,7 @@ fn compute_claimable_dividend(env: &Env, creator: &Address, holder: &Address) ->
 /// `CREATOR_TTL_LEDGERS` on fresh networks; forcing the full window at write
 /// time keeps the entry's real TTL aligned with the live-until the contract
 /// tracks for the TTL-extension event.
-fn extend_key_ttl_to_full_window(env: &Env, key: &DataKey) {
+fn extend_key_ttl_to_full_window<K: soroban_sdk::IntoVal<Env, soroban_sdk::Val>>(env: &Env, key: &K) {
     env.storage()
         .persistent()
         .extend_ttl(key, CREATOR_TTL_LEDGERS, CREATOR_TTL_LEDGERS);
@@ -2450,7 +2446,7 @@ impl CreatorKeysContract {
             if let Some(cap_bps) = env
                 .storage()
                 .persistent()
-                .get::<DataKey, u32>(&constants::storage::holder_cap_bps(&creator))
+                .get(&constants::storage::holder_cap_bps(&creator))
             {
                 let post_buy_supply = profile
                     .supply
@@ -2637,7 +2633,7 @@ impl CreatorKeysContract {
             if let Some(last_buy_ts) = env
                 .storage()
                 .persistent()
-                .get::<DataKey, u64>(&last_buy_key)
+                .get(&last_buy_key)
             {
                 let now = env.ledger().timestamp();
                 let unlock_at = last_buy_ts
@@ -3584,8 +3580,7 @@ impl CreatorKeysContract {
 
         env.storage()
             .persistent()
-            .set(&constants::storage::PROTOCOL_FEE_BPS, &resolved_bps);
-        extend_key_ttl_to_full_window(&env, &constants::storage::PROTOCOL_FEE_BPS);
+            .set(&soroban_sdk::symbol_short!("pr_fee_bps"), &resolved_bps);
         env.storage()
             .persistent()
             .set(&constants::storage::TREASURY_ADDRESS, &treasury);
@@ -4288,8 +4283,7 @@ impl CreatorKeysContract {
         }
         env.storage()
             .persistent()
-            .set(&constants::storage::LOCKUP_DURATION_SECS, &duration_secs);
-        extend_key_ttl_to_full_window(&env, &constants::storage::LOCKUP_DURATION_SECS);
+            .set(&soroban_sdk::symbol_short!("lck_dur"), &duration_secs);
         Ok(())
     }
 

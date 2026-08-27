@@ -1073,9 +1073,11 @@ pub const LOCKUP_BLOCKED_EVENT_NAME: Symbol = symbol_short!("lck_blk");
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
 pub struct LockupBlockedEvent {
-    pub creator: Address,
+    pub creator_id: Address,
     pub seller: Address,
-    pub ledger: u32,
+    pub last_buy_timestamp: u64,
+    pub unlock_at: u64,
+    pub current_timestamp: u64,
 }
 
 /// Shared lockup blocked event topics tuple.
