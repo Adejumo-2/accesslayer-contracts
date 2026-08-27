@@ -22,18 +22,19 @@ fn setup_test() -> (Env, CreatorKeysContractClient<'static>, Address, Address) {
     (env, client, admin, treasury)
 }
 
-fn register_creator(env: &Env, client: &CreatorKeysContractClient, creator: &Address) {        client.register_creator(
-            &RegisterCreatorParams {
-                creator: creator.clone(),
-                handle: String::from_str(env, "alice"),
-            },
-            &None,
-            &None,
-            &None,
-            &None,
-            &None,
-            &None,
-        );
+fn register_creator(env: &Env, client: &CreatorKeysContractClient, creator: &Address) {
+    client.register_creator(
+        &RegisterCreatorParams {
+            creator: creator.clone(),
+            handle: String::from_str(env, "alice"),
+        },
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+    );
 }
 
 #[test]

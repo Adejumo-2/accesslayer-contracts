@@ -1027,7 +1027,10 @@ mod issue_tests {
         let orders: soroban_sdk::Vec<(Address, u32)> = soroban_sdk::Vec::new(&env);
 
         let result = client.try_batch_buy(&buyer, &orders);
-        assert_eq!(result, Err(Ok(ContractError::AirdropRecipientLimitExceeded)));
+        assert_eq!(
+            result,
+            Err(Ok(ContractError::AirdropRecipientLimitExceeded))
+        );
     }
 
     #[test]
@@ -1061,7 +1064,10 @@ mod issue_tests {
         );
 
         let result = client.try_batch_buy(&buyer, &orders);
-        assert_eq!(result, Err(Ok(ContractError::AirdropRecipientLimitExceeded)));
+        assert_eq!(
+            result,
+            Err(Ok(ContractError::AirdropRecipientLimitExceeded))
+        );
     }
 
     // =========================================================================

@@ -5743,9 +5743,13 @@ impl CreatorKeysContract {
             let mut total_paid: i128 = 0;
             for _ in 0..quantity {
                 let profile = read_registered_creator_profile(&env, &creator)?;
-                let price = compute_bonding_curve_price(&env, &creator, base_price, profile.supply)?;
-                let _supply = Self::buy_key(env.clone(), creator.clone(), buyer.clone(), price, None)?;
-                total_paid = total_paid.checked_add(price).ok_or(ContractError::Overflow)?;
+                let price =
+                    compute_bonding_curve_price(&env, &creator, base_price, profile.supply)?;
+                let _supply =
+                    Self::buy_key(env.clone(), creator.clone(), buyer.clone(), price, None)?;
+                total_paid = total_paid
+                    .checked_add(price)
+                    .ok_or(ContractError::Overflow)?;
             }
             results.push_back(BatchBuyOrderResult {
                 creator,
