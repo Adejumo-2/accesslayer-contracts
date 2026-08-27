@@ -399,6 +399,14 @@ pub mod constants {
             DataKey::ReferralFeeBps
         }
 
+        pub fn royalty_config(creator: &Address) -> DataKey {
+            DataKey::RoyaltyConfig(creator.clone())
+        }
+
+        pub fn curve_exponent(creator: &Address) -> DataKey {
+            DataKey::CurveExponent(creator.clone())
+        }
+
         /// Absolute live-until ledger the contract last set for `creator`'s
         /// profile key, used to decide whether to emit the TTL-extension event.
         pub fn creator_ttl_live_until(creator: &Address) -> DataKey {
@@ -681,6 +689,12 @@ pub const DEFAULT_REFERRAL_FEE_BPS: u32 = 2000;
 /// Maximum number of discount tiers allowed.
 pub const MAX_DISCOUNT_TIERS: u32 = 5;
 
+/// Maximum number of entries in a single batch buy call.
+pub const MAX_BATCH_BUY_SIZE: usize = 5;
+
+/// Maximum royalty fee basis points (5%).
+pub const MAX_ROYALTY_BPS: u32 = 500;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[contracttype]
 pub enum CurvePreset {
@@ -877,6 +891,23 @@ pub struct WhitelistStatus {
     pub active: bool,
     pub expires_at_ledger: u32,
     pub remaining_ledgers: u32,
+}
+
+/// Creator royalty configuration for buy and sell fees.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct RoyaltyConfig {
+    pub buy_fee_bps: u32,
+    pub sell_fee_bps: u32,
+}
+
+/// Result of a single order in a batch buy.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct BatchBuyOrderResult {
+    pub creator: Address,
+    pub quantity: u32,
+    pub price_paid: i128,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1533,6 +1564,14 @@ fn accrue_sell_trade_fees(env: &Env, creator: &Address, price: i128) -> Result<(
         credit_protocol_fee_recipient_balance(env, protocol_fee)?;
     }
 
+    if let Some(royalty) = read_royalty_config(env, creator) {
+        let royalty_amount = fee::apply_percentage_fee(price, royalty.sell_fee_bps)
+            .ok_or(ContractError::Overflow)?;
+        if royalty_amount > 0 {
+            credit_creator_fee_recipient_balance(env, creator, royalty_amount)?;
+        }
+    }
+
     Ok(())
 }
 
@@ -1599,12 +1638,35 @@ fn read_curve_slope(env: &Env) -> i128 {
         .unwrap_or(0)
 }
 
+fn read_royalty_config(env: &Env, creator: &Address) -> Option<RoyaltyConfig> {
+    env.storage()
+        .persistent()
+        .get(&constants::storage::royalty_config(creator))
+}
+
+fn read_curve_exponent(env: &Env, creator: &Address) -> Option<u32> {
+    env.storage()
+        .persistent()
+        .get(&constants::storage::curve_exponent(creator))
+}
+
 fn compute_bonding_curve_price(
     env: &Env,
     creator: &Address,
     base_price: i128,
     supply: u32,
 ) -> Result<i128, ContractError> {
+    if let Some(exponent) = read_curve_exponent(env, creator) {
+        let slope = read_curve_slope(env);
+        let supply_exp = checked_pow_i128(supply as i128, exponent)?;
+        let supply_component = slope
+            .checked_mul(supply_exp)
+            .ok_or(ContractError::Overflow)?;
+        return base_price
+            .checked_add(supply_component)
+            .ok_or(ContractError::Overflow);
+    }
+
     let preset = env
         .storage()
         .persistent()
@@ -1635,6 +1697,16 @@ fn compute_bonding_curve_price(
                 .ok_or(ContractError::Overflow)
         }
     }
+}
+
+fn checked_pow_i128(base: i128, exp: u32) -> Result<i128, ContractError> {
+    let mut result: i128 = 1;
+    let mut _exp = exp;
+    while _exp > 0 {
+        result = result.checked_mul(base).ok_or(ContractError::Overflow)?;
+        _exp -= 1;
+    }
+    Ok(result)
 }
 
 fn zero_quote_response() -> QuoteResponse {
@@ -2275,6 +2347,14 @@ impl CreatorKeysContract {
                 // No referrer: full protocol fee goes to treasury and recipient
                 credit_treasury_balance(&env, protocol_fee)?;
                 credit_protocol_fee_recipient_balance(&env, protocol_fee)?;
+            }
+        }
+
+        if let Some(royalty) = read_royalty_config(&env, &creator) {
+            let royalty_amount = fee::apply_percentage_fee(price, royalty.buy_fee_bps)
+                .ok_or(ContractError::Overflow)?;
+            if royalty_amount > 0 {
+                credit_creator_fee_recipient_balance(&env, &creator, royalty_amount)?;
             }
         }
 
