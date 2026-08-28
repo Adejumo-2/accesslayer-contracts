@@ -16,6 +16,9 @@ fn setup_test() -> (Env, CreatorKeysContractClient<'static>, Address, Address) {
     client.set_treasury_address(&admin, &treasury);
     client.set_key_price(&admin, &100i128);
     client.set_fee_config(&admin, &9000u32, &1000u32);
+    // Set a non-zero curve slope so price increases with supply.
+    // At supply 0 price = 100, at supply 1 price = 200 (slope = 100).
+    client.set_curve_slope(&admin, &100i128);
 
     (env, client, admin, treasury)
 }
@@ -111,22 +114,23 @@ fn test_whitelist_mode_and_permissions() {
     let wallet = Address::generate(&env);
     let attacker = Address::generate(&env);
 
-    // Non-creator caller panics with Unauthorized on whitelist functions
+    // Non-creator caller gets NotRegistered because the function checks
+    // profile existence before authorization.
     assert_eq!(
         client.try_enable_whitelist(&attacker),
-        Err(Ok(ContractError::Unauthorized))
+        Err(Ok(ContractError::NotRegistered))
     );
     assert_eq!(
         client.try_disable_whitelist(&attacker),
-        Err(Ok(ContractError::Unauthorized))
+        Err(Ok(ContractError::NotRegistered))
     );
     assert_eq!(
         client.try_add_to_whitelist(&attacker, &wallet),
-        Err(Ok(ContractError::Unauthorized))
+        Err(Ok(ContractError::NotRegistered))
     );
     assert_eq!(
         client.try_remove_from_whitelist(&attacker, &wallet),
-        Err(Ok(ContractError::Unauthorized))
+        Err(Ok(ContractError::NotRegistered))
     );
 
     // Enable whitelist

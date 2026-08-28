@@ -2430,6 +2430,20 @@ impl CreatorKeysContract {
         referrer: Option<Address>,
     ) -> Result<u32, ContractError> {
         buyer.require_auth();
+        Self::buy_key_impl(env, creator, buyer, payment, max_price, referrer)
+    }
+
+    /// Internal buy logic shared by `buy_key_with_referrer` and
+    /// `batch_buy`.  Called without `require_auth` so that batch
+    /// iterations do not double-authorise the same frame.
+    fn buy_key_impl(
+        env: Env,
+        creator: Address,
+        buyer: Address,
+        payment: i128,
+        max_price: Option<i128>,
+        referrer: Option<Address>,
+    ) -> Result<u32, ContractError> {
         assert_global_trading_not_halted(&env)?;
         assert_not_paused(&env)?;
         assert_not_blacklisted(&env, &buyer)?;
@@ -5997,11 +6011,12 @@ impl CreatorKeysContract {
                 // correct payment to buy_key and track cumulative cost.
                 let per_key_price = resolve_buy_quote_price(&env, &creator)?
                     .ok_or(ContractError::KeyPriceNotSet)?;
-                let _ = Self::buy_key(
+                let _ = Self::buy_key_impl(
                     env.clone(),
                     creator.clone(),
                     buyer.clone(),
                     per_key_price,
+                    None,
                     None,
                 )?;
                 paid = paid
