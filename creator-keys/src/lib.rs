@@ -98,20 +98,6 @@ pub enum ContractError {
     NothingToClaim = 48,
     NotWhitelisted = 49,
     CircuitBreakerTriggered = 50,
-    /// Protocol-wide emergency trading halt is active.
-    GlobalTradingHalted = 51,
-    /// The batch buy call exceeds the maximum allowed order count.
-    BatchSizeExceeded = 52,
-    /// Creator royalty fee exceeds the allowed maximum.
-    RoyaltyExceedsLimit = 53,
-    /// The bonding curve exponent is outside the allowed range.
-    InvalidExponent = 54,
-    /// Holder exceeds the per-creator percentage holding cap.
-    MaxHoldingExceeded = 55,
-    /// Sell rejected because the holder's lockup period is still active.
-    LockupPeriodActive = 56,
-    /// Holder cap value is outside the allowed range.
-    InvalidHolderCap = 57,
 }
 
 #[contracterror]
@@ -1430,7 +1416,7 @@ fn is_global_trading_paused(env: &Env) -> bool {
 /// the per-key pause guard so a global halt always takes precedence.
 fn assert_global_trading_not_halted(env: &Env) -> Result<(), ContractError> {
     if is_global_trading_paused(env) {
-        return Err(ContractError::GlobalTradingHalted);
+        return Err(ContractError::ProtocolPaused);
     }
     Ok(())
 }
@@ -2588,7 +2574,7 @@ impl CreatorKeysContract {
                 let max_allowed = ((i128::from(post_buy_supply) * i128::from(cap_bps))
                     / i128::from(fee::BPS_MAX)) as u32;
                 if post_buy_balance > max_allowed {
-                    return Err(ContractError::MaxHoldingExceeded);
+                    return Err(ContractError::SupplyCapExceeded);
                 }
             }
         }
@@ -2803,7 +2789,7 @@ impl CreatorKeysContract {
                             current_timestamp: now,
                         },
                     );
-                    return Err(ContractError::LockupPeriodActive);
+                    return Err(ContractError::SellUnderflow);
                 }
             }
         }
@@ -4387,10 +4373,10 @@ impl CreatorKeysContract {
     /// Only callable by the creator. `cap_bps` may be omitted to select
     /// [`DEFAULT_HOLDER_CAP_BPS`] (10%); an explicit value must lie between
     /// [`HOLDER_CAP_MIN_BPS`] (1%) and [`HOLDER_CAP_MAX_BPS`] (25%), otherwise
-    /// [`ContractError::InvalidHolderCap`] is returned. Once configured,
+    /// [`ContractError::InvalidFeeConfig`] is returned. Once configured,
     /// `buy_key` rejects purchases that would push a non-creator wallet above
     /// `cap_bps` of the total supply with
-    /// [`ContractError::MaxHoldingExceeded`]. The creator's own wallet is
+    /// [`ContractError::SupplyCapExceeded`]. The creator's own wallet is
     /// exempt from the cap.
     pub fn set_holder_cap(
         env: Env,
@@ -4400,7 +4386,7 @@ impl CreatorKeysContract {
         creator.require_auth();
         let resolved_bps = cap_bps.unwrap_or(DEFAULT_HOLDER_CAP_BPS);
         if !(HOLDER_CAP_MIN_BPS..=HOLDER_CAP_MAX_BPS).contains(&resolved_bps) {
-            return Err(ContractError::InvalidHolderCap);
+            return Err(ContractError::InvalidFeeConfig);
         }
         let key = constants::storage::holder_cap_bps(&creator);
         env.storage().persistent().set(&key, &resolved_bps);
@@ -4425,7 +4411,7 @@ impl CreatorKeysContract {
     /// (24 hours) as the canonical starting value. Once configured, `sell_key`
     /// rejects sales made less than `duration_secs` after the seller's most
     /// recent buy of that creator's keys with
-    /// [`ContractError::LockupPeriodActive`] and emits a
+    /// [`ContractError::SellUnderflow`] and emits a
     /// [`events::LOCKUP_BLOCKED_EVENT_NAME`] event.
     pub fn set_lockup_duration(
         env: Env,
@@ -5993,7 +5979,7 @@ impl CreatorKeysContract {
     ///
     /// # Errors
     ///
-    /// - [`ContractError::BatchSizeExceeded`] if `orders` is empty or exceeds
+    /// - [`ContractError::SupplyCapExceeded`] if `orders` is empty or exceeds
     ///   [`MAX_BATCH_BUY_SIZE`].
     pub fn batch_buy(
         env: Env,
@@ -6006,7 +5992,7 @@ impl CreatorKeysContract {
         assert_not_blacklisted(&env, &buyer)?;
 
         if orders.is_empty() || orders.len() as usize > MAX_BATCH_BUY_SIZE {
-            return Err(ContractError::BatchSizeExceeded);
+            return Err(ContractError::SupplyCapExceeded);
         }
 
         let mut results = Vec::new(&env);
@@ -6053,7 +6039,7 @@ impl CreatorKeysContract {
     /// # Errors
     ///
     /// - [`ContractError::NotRegistered`] if `creator` is not registered
-    /// - [`ContractError::RoyaltyExceedsLimit`] if either fee exceeds [`MAX_ROYALTY_BPS`]
+    /// - [`ContractError::ProtocolFeeExceedsCap`] if either fee exceeds [`MAX_ROYALTY_BPS`]
     /// - [`ContractError::Unauthorized`] if `caller` is not the creator
     pub fn set_royalty(
         env: Env,
@@ -6068,7 +6054,7 @@ impl CreatorKeysContract {
             return Err(ContractError::Unauthorized);
         }
         if buy_fee_bps > MAX_ROYALTY_BPS || sell_fee_bps > MAX_ROYALTY_BPS {
-            return Err(ContractError::RoyaltyExceedsLimit);
+            return Err(ContractError::ProtocolFeeExceedsCap);
         }
         let config = RoyaltyConfig {
             buy_fee_bps,
@@ -6098,7 +6084,7 @@ impl CreatorKeysContract {
     /// # Errors
     ///
     /// - [`ContractError::Unauthorized`] if `caller` is not the protocol admin
-    /// - [`ContractError::InvalidExponent`] if `exponent` is 0 or > 5
+    /// - [`ContractError::InvalidFeeConfig`] if `exponent` is 0 or > 5
     pub fn migrate_curve(
         env: Env,
         caller: Address,
@@ -6115,7 +6101,7 @@ impl CreatorKeysContract {
             return Err(ContractError::Unauthorized);
         }
         if exponent == 0 || exponent > 5 {
-            return Err(ContractError::InvalidExponent);
+            return Err(ContractError::InvalidFeeConfig);
         }
         for creator_id in key_ids.iter() {
             let key = constants::storage::curve_exponent(&creator_id);

@@ -67,7 +67,7 @@ fn test_sell_within_lockup_is_rejected_and_emits_event() {
     let result = s.client.try_sell_key(&s.creator, &trader, &None);
     assert_eq!(
         result,
-        Ok(Err(ContractError::LockupPeriodActive)),
+        Ok(Err(ContractError::SellUnderflow)),
         "a sell inside the 24h lockup must be rejected"
     );
 
@@ -127,7 +127,7 @@ fn test_last_buy_timestamp_is_updated_on_every_buy() {
     // the sell must stay blocked because last_buy_timestamp was refreshed.
     set_test_timestamp(&env, second_buy_ts + LOCKUP_SECS - 1);
     let result = s.client.try_sell_key(&s.creator, &trader, &None);
-    assert_eq!(result, Ok(Err(ContractError::LockupPeriodActive)));
+    assert_eq!(result, Ok(Err(ContractError::SellUnderflow)));
 
     // Once the refreshed window has elapsed the sell goes through.
     set_test_timestamp(&env, second_buy_ts + LOCKUP_SECS);
