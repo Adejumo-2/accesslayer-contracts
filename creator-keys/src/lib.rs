@@ -1598,7 +1598,7 @@ fn read_trade_fee_config(env: &Env) -> Option<(u32, Address)> {
     let fee_bps: u32 = env
         .storage()
         .persistent()
-        .get(&soroban_sdk::symbol_short!("pr_fee_bps"))?;
+        .get(&soroban_sdk::symbol_short!("pf_bps"))?;
     let treasury: Address = env
         .storage()
         .persistent()
@@ -2447,7 +2447,7 @@ impl CreatorKeysContract {
             if let Some(cap_bps) = env
                 .storage()
                 .persistent()
-                .get(&constants::storage::holder_cap_bps(&creator))
+                .get::<soroban_sdk::Symbol, u32>(&constants::storage::holder_cap_bps(&creator))
             {
                 let post_buy_supply = profile
                     .supply
@@ -2631,7 +2631,11 @@ impl CreatorKeysContract {
         // elapsed since their most recent buy for this creator.
         if let Some(lockup_secs) = read_lockup_duration_secs(&env) {
             let last_buy_key = constants::storage::last_buy_timestamp(&creator, &seller);
-            if let Some(last_buy_ts) = env.storage().persistent().get(&last_buy_key) {
+            if let Some(last_buy_ts) = env
+                .storage()
+                .persistent()
+                .get::<soroban_sdk::Symbol, u64>(&last_buy_key)
+            {
                 let now = env.ledger().timestamp();
                 let unlock_at = last_buy_ts
                     .checked_add(lockup_secs)
@@ -3577,7 +3581,7 @@ impl CreatorKeysContract {
 
         env.storage()
             .persistent()
-            .set(&soroban_sdk::symbol_short!("pr_fee_bps"), &resolved_bps);
+            .set(&soroban_sdk::symbol_short!("pf_bps"), &resolved_bps);
         env.storage()
             .persistent()
             .set(&constants::storage::TREASURY_ADDRESS, &treasury);
