@@ -98,6 +98,7 @@ pub enum ContractError {
     NothingToClaim = 48,
     NotWhitelisted = 49,
     CircuitBreakerTriggered = 50,
+    /// Protocol-wide emergency trading halt is active.
     GlobalTradingHalted = 51,
     /// The batch buy call exceeds the maximum allowed order count.
     BatchSizeExceeded = 52,
@@ -135,6 +136,18 @@ pub enum FeatureError {
     InvalidAuctionConfig = 9,
     StakeLockActive = 10,
     NoStakeFound = 11,
+    /// The batch buy call exceeds the maximum allowed order count.
+    BatchSizeExceeded = 13,
+    /// Creator royalty fee exceeds the allowed maximum.
+    RoyaltyExceedsLimit = 14,
+    /// The bonding curve exponent is outside the allowed range.
+    InvalidExponent = 15,
+    /// Holder exceeds the per-creator percentage holding cap.
+    MaxHoldingExceeded = 16,
+    /// Sell rejected because the holder's lockup period is still active.
+    LockupPeriodActive = 17,
+    /// Holder cap value is outside the allowed range.
+    InvalidHolderCap = 18,
 }
 
 pub mod fee {
