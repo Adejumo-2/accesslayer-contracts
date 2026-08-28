@@ -2509,7 +2509,9 @@ impl CreatorKeysContract {
                     .checked_mul(threshold_pct as u128)
                     .ok_or(ContractError::Overflow)?
                     / 100;
-                if (price_change as u128) >= max_change {
+                // When max_change rounds to zero the threshold is too
+                // small to enforce meaningfully; skip the check.
+                if max_change > 0 && (price_change as u128) >= max_change {
                     env.events().publish(
                         (events::circuit_breaker_triggered_topics(),),
                         events::CircuitBreakerTriggeredEvent {
