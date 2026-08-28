@@ -6105,52 +6105,6 @@ impl CreatorKeysContract {
     pub fn get_curve_exponent(env: Env, creator: Address) -> Option<u32> {
         read_curve_exponent(&env, &creator)
     }
-
-    // =========================================================================
-    // TTL refresh
-    // =========================================================================
-
-    /// Re-extends all known global entries and per-creator entries so
-    /// actively used state never expires. Only callable by the protocol admin.
-    pub fn refresh_ttl(
-        env: Env,
-        admin: Address,
-        creators: Vec<Address>,
-    ) -> Result<(), ContractError> {
-        admin.require_auth();
-        assert_is_admin(&env, &admin)?;
-
-        let global_keys = [
-            constants::storage::FEE_CONFIG,
-            constants::storage::KEY_PRICE,
-            constants::storage::TREASURY_ADDRESS,
-            constants::storage::ADMIN_ADDRESS,
-            constants::storage::PROTOCOL_FEE_RECIPIENT,
-            constants::storage::PROTOCOL_FEE_RECIPIENT_BALANCE,
-            constants::storage::PROTOCOL_STATE_VERSION,
-            constants::storage::PAUSED,
-            constants::storage::CURVE_SLOPE,
-            constants::storage::TREASURY_BALANCE,
-            constants::storage::RETENTION_POLICY,
-            constants::storage::GLOBAL_DEADLINE_LEDGER,
-            constants::storage::referral_fee_bps(),
-            constants::storage::PROTOCOL_FEE_BPS,
-            constants::storage::LOCKUP_DURATION_SECS,
-        ];
-        for key in global_keys.iter() {
-            extend_key_ttl_to_full_window(&env, key);
-        }
-
-        for creator in creators.iter() {
-            extend_creator_ttl(&env, &creator);
-            let whitelist_key = constants::storage::whitelist(&creator);
-            if env.storage().persistent().has(&whitelist_key) {
-                extend_key_ttl_to_full_window(&env, &whitelist_key);
-            }
-        }
-
-        Ok(())
-    }
 }
 #[cfg(test)]
 mod tests {
