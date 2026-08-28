@@ -452,8 +452,6 @@ pub mod constants {
             DataKey::WhitelistMode(key_id.clone())
         }
 
-
-
         pub fn holder_cap_bps(_creator: &Address) -> soroban_sdk::Symbol {
             soroban_sdk::symbol_short!("hl_cap")
         }
@@ -2015,7 +2013,10 @@ fn compute_claimable_dividend(env: &Env, creator: &Address, holder: &Address) ->
 /// `CREATOR_TTL_LEDGERS` on fresh networks; forcing the full window at write
 /// time keeps the entry's real TTL aligned with the live-until the contract
 /// tracks for the TTL-extension event.
-fn extend_key_ttl_to_full_window<K: soroban_sdk::IntoVal<Env, soroban_sdk::Val>>(env: &Env, key: &K) {
+fn extend_key_ttl_to_full_window<K: soroban_sdk::IntoVal<Env, soroban_sdk::Val>>(
+    env: &Env,
+    key: &K,
+) {
     env.storage()
         .persistent()
         .extend_ttl(key, CREATOR_TTL_LEDGERS, CREATOR_TTL_LEDGERS);
@@ -2630,11 +2631,7 @@ impl CreatorKeysContract {
         // elapsed since their most recent buy for this creator.
         if let Some(lockup_secs) = read_lockup_duration_secs(&env) {
             let last_buy_key = constants::storage::last_buy_timestamp(&creator, &seller);
-            if let Some(last_buy_ts) = env
-                .storage()
-                .persistent()
-                .get(&last_buy_key)
-            {
+            if let Some(last_buy_ts) = env.storage().persistent().get(&last_buy_key) {
                 let now = env.ledger().timestamp();
                 let unlock_at = last_buy_ts
                     .checked_add(lockup_secs)
