@@ -99,6 +99,18 @@ pub enum ContractError {
     NotWhitelisted = 49,
     CircuitBreakerTriggered = 50,
     GlobalTradingHalted = 51,
+    /// The batch buy call exceeds the maximum allowed order count.
+    BatchSizeExceeded = 52,
+    /// Creator royalty fee exceeds the allowed maximum.
+    RoyaltyExceedsLimit = 53,
+    /// The bonding curve exponent is outside the allowed range.
+    InvalidExponent = 54,
+    /// Holder exceeds the per-creator percentage holding cap.
+    MaxHoldingExceeded = 55,
+    /// Sell rejected because the holder's lockup period is still active.
+    LockupPeriodActive = 56,
+    /// Holder cap value is outside the allowed range.
+    InvalidHolderCap = 57,
 }
 
 #[contracterror]
@@ -498,6 +510,14 @@ pub mod constants {
         pub fn staking_rewards_pool(creator: &Address) -> DataKey {
             DataKey::StakingRewardsPool(creator.clone())
         }
+
+        pub fn holder_cap_bps(creator: &Address) -> DataKey {
+            DataKey::HolderCapBps(creator.clone())
+        }
+
+        pub fn last_buy_timestamp(creator: &Address, holder: &Address) -> DataKey {
+            DataKey::LastBuyTimestamp(creator.clone(), holder.clone())
+        }
     }
 
     fn creator_key(creator: &Address) -> DataKey {
@@ -858,6 +878,26 @@ pub enum DataKey {
     GlobalPauseVote(Address),
     /// A pending `global_resume` vote cast by the given admin.
     GlobalResumeVote(Address),
+    /// Creator-specific royalty fee configuration.
+    RoyaltyConfig(Address),
+    /// Creator-specific bonding curve exponent for configurable curves.
+    CurveExponent(Address),
+    /// Pre-launch fixed-price auction configuration for a creator.
+    AuctionConfig(Address),
+    /// Ledger at which a holder's stake unlocks for a given creator.
+    StakeUnlockLedger(Address, Address),
+    /// Total number of keys currently staked across all holders for a creator.
+    TotalStaked(Address),
+    /// Accumulated staking rewards pool balance for a creator.
+    StakingRewardsPool(Address),
+    /// Per-creator maximum share of the supply a single wallet may hold.
+    HolderCapBps(Address),
+    /// Ledger timestamp of a holder's most recent buy for a creator.
+    LastBuyTimestamp(Address, Address),
+    /// Protocol trade fee in basis points.
+    ProtocolFeeBps,
+    /// Sell lockup duration in seconds.
+    LockupDurationSecs,
 }
 
 /// Time-locked key allocation for creator self-vesting.
@@ -985,6 +1025,19 @@ pub struct BatchBuyOrderResult {
     pub creator: Address,
     pub quantity: u32,
     pub price_paid: i128,
+}
+
+/// Pre-launch fixed-price auction configuration for a creator.
+///
+/// When configured, the first `auction_supply` keys are sold at `auction_price`
+/// instead of the bonding curve price. The contract transitions back to the
+/// curve automatically once the auction supply is exhausted.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct AuctionConfig {
+    pub auction_price: i128,
+    pub auction_supply: u32,
+    pub auction_sold: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -2588,7 +2641,8 @@ impl CreatorKeysContract {
 
                 if referral_amount > 0 {
                     let ref_key = constants::storage::referral_earnings(&referrer_addr);
-                    let current_earnings: i128 = env.storage().persistent().get(&ref_key).unwrap_or(0);
+                    let current_earnings: i128 =
+                        env.storage().persistent().get(&ref_key).unwrap_or(0);
                     let new_earnings = current_earnings
                         .checked_add(referral_amount)
                         .ok_or(ContractError::Overflow)?;
@@ -4746,11 +4800,7 @@ impl CreatorKeysContract {
     ///
     /// Only callable by the creator. Panics with `CapAlreadySet` if a cap is
     /// already set and the new cap is lower than the current supply.
-    pub fn set_supply_cap(
-        env: Env,
-        creator: Address,
-        cap: u32,
-    ) -> Result<(), ContractError> {
+    pub fn set_supply_cap(env: Env, creator: Address, cap: u32) -> Result<(), ContractError> {
         creator.require_auth();
 
         let profile = read_registered_creator_profile(&env, &creator)?;
@@ -4825,11 +4875,7 @@ impl CreatorKeysContract {
     ///
     /// Callable by any admin in the multisig list. If this is the first
     /// proposal, it records the proposer and awaits a second approval.
-    pub fn propose_pause(
-        env: Env,
-        creator: Address,
-        caller: Address,
-    ) -> Result<(), ContractError> {
+    pub fn propose_pause(env: Env, creator: Address, caller: Address) -> Result<(), ContractError> {
         caller.require_auth();
 
         let config: MultisigAdmins = env
@@ -4876,11 +4922,7 @@ impl CreatorKeysContract {
     ///
     /// Callable by a second admin. When the approval threshold (2 of 3) is
     /// reached, the pause executes automatically and all proposals are reset.
-    pub fn approve_pause(
-        env: Env,
-        creator: Address,
-        caller: Address,
-    ) -> Result<(), ContractError> {
+    pub fn approve_pause(env: Env, creator: Address, caller: Address) -> Result<(), ContractError> {
         caller.require_auth();
 
         let config: MultisigAdmins = env
@@ -5244,9 +5286,7 @@ impl CreatorKeysContract {
 
         env.events().publish(
             events::whitelist_enabled_topics(&creator),
-            events::WhitelistEnabledEvent {
-                creator,
-            },
+            events::WhitelistEnabledEvent { creator },
         );
 
         Ok(())
@@ -5265,9 +5305,7 @@ impl CreatorKeysContract {
 
         env.events().publish(
             events::whitelist_disabled_topics(&creator),
-            events::WhitelistDisabledEvent {
-                creator,
-            },
+            events::WhitelistDisabledEvent { creator },
         );
 
         Ok(())
@@ -5290,10 +5328,7 @@ impl CreatorKeysContract {
 
         env.events().publish(
             events::address_whitelisted_topics(&creator),
-            events::AddressWhitelistedEvent {
-                creator,
-                address,
-            },
+            events::AddressWhitelistedEvent { creator, address },
         );
 
         Ok(())
@@ -5316,10 +5351,7 @@ impl CreatorKeysContract {
 
         env.events().publish(
             events::address_removed_topics(&creator),
-            events::AddressRemovedEvent {
-                creator,
-                address,
-            },
+            events::AddressRemovedEvent { creator, address },
         );
 
         Ok(())
@@ -5359,10 +5391,7 @@ impl CreatorKeysContract {
             .ok_or(ContractError::Overflow)?;
 
         if current_balance > 0 && new_balance == 0 {
-            profile.holder_count = profile
-                .holder_count
-                .checked_sub(1)
-                .unwrap_or(0);
+            profile.holder_count = profile.holder_count.checked_sub(1).unwrap_or(0);
         }
 
         profile.supply = new_supply;
@@ -5401,7 +5430,10 @@ impl CreatorKeysContract {
     ) -> Option<VestingSchedule> {
         env.storage()
             .persistent()
-            .get(&constants::storage::vesting_schedule(&creator, &beneficiary))
+            .get(&constants::storage::vesting_schedule(
+                &creator,
+                &beneficiary,
+            ))
     }
 
     // =========================================================================
@@ -5426,11 +5458,7 @@ impl CreatorKeysContract {
         const TIMELOCK_DELAY_LEDGERS: u32 = 34_560;
 
         let next_id_key = DataKey::TimelockNextId;
-        let proposal_id: u32 = env
-            .storage()
-            .persistent()
-            .get(&next_id_key)
-            .unwrap_or(1u32);
+        let proposal_id: u32 = env.storage().persistent().get(&next_id_key).unwrap_or(1u32);
 
         let current_ledger = env.ledger().sequence();
         let execution_not_before = current_ledger
@@ -5548,10 +5576,7 @@ impl CreatorKeysContract {
     }
 
     /// Read-only view: returns a timelock proposal by ID.
-    pub fn get_timelock_proposal(
-        env: Env,
-        proposal_id: u32,
-    ) -> Option<TimelockProposal> {
+    pub fn get_timelock_proposal(env: Env, proposal_id: u32) -> Option<TimelockProposal> {
         env.storage()
             .persistent()
             .get(&DataKey::TimelockProposal(proposal_id))
@@ -5795,11 +5820,7 @@ impl CreatorKeysContract {
     /// - [`FeatureError::Unauthorized`] if `caller` is not `creator`
     /// - [`FeatureError::NoAuctionConfigured`] if no auction config exists for `creator`
     /// - [`FeatureError::AuctionAlreadyStarted`] if `auction_sold` is greater than zero
-    pub fn cancel_auction(
-        env: Env,
-        creator: Address,
-        caller: Address,
-    ) -> Result<(), FeatureError> {
+    pub fn cancel_auction(env: Env, creator: Address, caller: Address) -> Result<(), FeatureError> {
         caller.require_auth();
         if caller != creator {
             return Err(FeatureError::Unauthorized);
@@ -5945,6 +5966,201 @@ impl CreatorKeysContract {
         env.storage()
             .persistent()
             .get(&constants::storage::stake_unlock_ledger(&creator, &holder))
+    }
+
+    // =========================================================================
+    // #758 — Batch buy
+    // =========================================================================
+
+    /// Executes multiple key purchases in a single transaction.
+    ///
+    /// Each entry in `orders` is a `(creator, quantity)` pair processed
+    /// sequentially. The caller pays the sum of all individual buy costs.
+    /// Returns a vector of [`BatchBuyOrderResult`] with the per-order outcome.
+    ///
+    /// # Errors
+    ///
+    /// - [`ContractError::BatchSizeExceeded`] if `orders` is empty or exceeds
+    ///   [`MAX_BATCH_BUY_SIZE`].
+    pub fn batch_buy(
+        env: Env,
+        buyer: Address,
+        orders: Vec<(Address, u32)>,
+    ) -> Result<Vec<BatchBuyOrderResult>, ContractError> {
+        buyer.require_auth();
+        assert_global_trading_not_halted(&env)?;
+        assert_not_paused(&env)?;
+        assert_not_blacklisted(&env, &buyer)?;
+
+        if orders.is_empty() || orders.len() as usize > MAX_BATCH_BUY_SIZE {
+            return Err(ContractError::BatchSizeExceeded);
+        }
+
+        let mut results = Vec::new(&env);
+        for order in orders.iter() {
+            let (creator, quantity) = order;
+            if quantity == 0 {
+                return Err(ContractError::NotPositiveAmount);
+            }
+            let mut paid: i128 = 0;
+            for _ in 0..quantity {
+                // Resolve the per-key quote price so we can forward the
+                // correct payment to buy_key and track cumulative cost.
+                let per_key_price = resolve_buy_quote_price(&env, &creator)?
+                    .ok_or(ContractError::KeyPriceNotSet)?;
+                let _ = Self::buy_key(
+                    env.clone(),
+                    creator.clone(),
+                    buyer.clone(),
+                    per_key_price,
+                    None,
+                )?;
+                paid = paid
+                    .checked_add(per_key_price)
+                    .ok_or(ContractError::Overflow)?;
+            }
+            results.push_back(BatchBuyOrderResult {
+                creator: creator.clone(),
+                quantity,
+                price_paid: paid,
+            });
+        }
+        Ok(results)
+    }
+
+    // =========================================================================
+    // #755 — Royalty configuration
+    // =========================================================================
+
+    /// Configures creator-specific royalty fees for buys and sells.
+    ///
+    /// Each fee is capped at [`MAX_ROYALTY_BPS`]. Only callable by a
+    /// registered creator for their own key.
+    ///
+    /// # Errors
+    ///
+    /// - [`ContractError::NotRegistered`] if `creator` is not registered
+    /// - [`ContractError::RoyaltyExceedsLimit`] if either fee exceeds [`MAX_ROYALTY_BPS`]
+    /// - [`ContractError::Unauthorized`] if `caller` is not the creator
+    pub fn set_royalty(
+        env: Env,
+        creator: Address,
+        buy_fee_bps: u32,
+        sell_fee_bps: u32,
+    ) -> Result<(), ContractError> {
+        creator.require_auth();
+        assert_not_paused(&env)?;
+        let profile = read_registered_creator_profile(&env, &creator)?;
+        if profile.creator != creator {
+            return Err(ContractError::Unauthorized);
+        }
+        if buy_fee_bps > MAX_ROYALTY_BPS || sell_fee_bps > MAX_ROYALTY_BPS {
+            return Err(ContractError::RoyaltyExceedsLimit);
+        }
+        let config = RoyaltyConfig {
+            buy_fee_bps,
+            sell_fee_bps,
+        };
+        let key = constants::storage::royalty_config(&creator);
+        env.storage().persistent().set(&key, &config);
+        extend_key_ttl_to_full_window(&env, &key);
+        Ok(())
+    }
+
+    /// Read-only view: returns the royalty configuration for a creator, if set.
+    pub fn get_royalty_config(env: Env, creator: Address) -> Option<RoyaltyConfig> {
+        read_royalty_config(&env, &creator)
+    }
+
+    // =========================================================================
+    // #756 — Curve migration
+    // =========================================================================
+
+    /// Migrates a creator's bonding curve to a new exponent.
+    ///
+    /// Only callable by the protocol admin. The exponent must be between 1
+    /// and 5 (inclusive). Stores the exponent per-creator so different keys
+    /// can run different curve shapes.
+    ///
+    /// # Errors
+    ///
+    /// - [`ContractError::Unauthorized`] if `caller` is not the protocol admin
+    /// - [`ContractError::InvalidExponent`] if `exponent` is 0 or > 5
+    pub fn migrate_curve(
+        env: Env,
+        caller: Address,
+        exponent: u32,
+        key_ids: Vec<Address>,
+    ) -> Result<(), ContractError> {
+        caller.require_auth();
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&constants::storage::ADMIN_ADDRESS)
+            .ok_or(ContractError::Unauthorized)?;
+        if caller != admin {
+            return Err(ContractError::Unauthorized);
+        }
+        if exponent == 0 || exponent > 5 {
+            return Err(ContractError::InvalidExponent);
+        }
+        for creator_id in key_ids.iter() {
+            let key = constants::storage::curve_exponent(&creator_id);
+            env.storage().persistent().set(&key, &exponent);
+            extend_key_ttl_to_full_window(&env, &key);
+        }
+        Ok(())
+    }
+
+    /// Read-only view: returns the curve exponent for a creator, if set.
+    pub fn get_curve_exponent(env: Env, creator: Address) -> Option<u32> {
+        read_curve_exponent(&env, &creator)
+    }
+
+    // =========================================================================
+    // TTL refresh
+    // =========================================================================
+
+    /// Re-extends all known global entries and per-creator entries so
+    /// actively used state never expires. Only callable by the protocol admin.
+    pub fn refresh_ttl(
+        env: Env,
+        admin: Address,
+        creators: Vec<Address>,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        assert_is_admin(&env, &admin)?;
+
+        let global_keys = [
+            constants::storage::FEE_CONFIG,
+            constants::storage::KEY_PRICE,
+            constants::storage::TREASURY_ADDRESS,
+            constants::storage::ADMIN_ADDRESS,
+            constants::storage::PROTOCOL_FEE_RECIPIENT,
+            constants::storage::PROTOCOL_FEE_RECIPIENT_BALANCE,
+            constants::storage::PROTOCOL_STATE_VERSION,
+            constants::storage::PAUSED,
+            constants::storage::CURVE_SLOPE,
+            constants::storage::TREASURY_BALANCE,
+            constants::storage::RETENTION_POLICY,
+            constants::storage::GLOBAL_DEADLINE_LEDGER,
+            constants::storage::referral_fee_bps(),
+            constants::storage::PROTOCOL_FEE_BPS,
+            constants::storage::LOCKUP_DURATION_SECS,
+        ];
+        for key in global_keys.iter() {
+            extend_key_ttl_to_full_window(&env, key);
+        }
+
+        for creator in creators.iter() {
+            extend_creator_ttl(&env, &creator);
+            let whitelist_key = constants::storage::whitelist(&creator);
+            if env.storage().persistent().has(&whitelist_key) {
+                extend_key_ttl_to_full_window(&env, &whitelist_key);
+            }
+        }
+
+        Ok(())
     }
 }
 #[cfg(test)]
