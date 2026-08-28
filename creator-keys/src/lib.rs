@@ -872,9 +872,9 @@ pub struct VestingSchedule {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[contracttype]
 pub enum TimelockChangeType {
-    UpdateFee = 0,
-    UpdateCurveExponent = 1,
-    UpdateTreasury = 2,
+    Fee = 0,
+    CurveExponent = 1,
+    Treasury = 2,
 }
 
 /// A timelocked config change proposal.
@@ -1303,7 +1303,7 @@ fn assert_metadata_field_length(
 /// [`ContractError::DisplayNameEmpty`] and enforces per-field byte-length
 /// limits consistent with the handle rules used at registration.
 fn validate_key_metadata(metadata: &KeyMetadata) -> Result<(), ContractError> {
-    if metadata.name.len() == 0 {
+    if metadata.name.is_empty() {
         return Err(ContractError::DisplayNameEmpty);
     }
     assert_metadata_field_length(
@@ -5019,9 +5019,7 @@ impl CreatorKeysContract {
             return Err(ContractError::VestingNotStarted);
         }
 
-        let elapsed = current_ledger
-            .checked_sub(schedule.start_ledger)
-            .unwrap_or(0);
+        let elapsed = current_ledger.saturating_sub(schedule.start_ledger);
 
         let vested_keys = if elapsed >= schedule.vesting_period_ledgers {
             schedule.total_keys
@@ -5216,7 +5214,7 @@ impl CreatorKeysContract {
             .ok_or(ContractError::Overflow)?;
 
         if current_balance > 0 && new_balance == 0 {
-            profile.holder_count = profile.holder_count.checked_sub(1).unwrap_or(0);
+            profile.holder_count = profile.holder_count.saturating_sub(1);
         }
 
         profile.supply = new_supply;
@@ -5793,7 +5791,7 @@ impl CreatorKeysContract {
         admin.require_auth();
         assert_is_admin(&env, &admin)?;
 
-        if exponent < 1 || exponent > 5 {
+        if !(1..=5).contains(&exponent) {
             return Err(ContractError::InvalidFeeConfig);
         }
 
