@@ -450,20 +450,12 @@ pub mod constants {
             DataKey::ReferralFeeBps
         }
 
-        const FEAT_ROYALTY: u8 = 0;
-        const FEAT_EXPONENT: u8 = 1;
-        const FEAT_AUCTION: u8 = 2;
-        const FEAT_TOTAL_STAKED: u8 = 3;
-        const FEAT_REWARDS_POOL: u8 = 4;
-        const FEAT_HOLDER_CAP: u8 = 5;
-        const FEAT_STAKE_UNLOCK: u8 = 6;
-
         pub fn royalty_config(creator: &Address) -> DataKey {
-            DataKey::CreatorFeatureData(Self::FEAT_ROYALTY, creator.clone(), creator.clone())
+            DataKey::CreatorFeatureData(0, creator.clone(), creator.clone())
         }
 
         pub fn curve_exponent(creator: &Address) -> DataKey {
-            DataKey::CreatorFeatureData(Self::FEAT_EXPONENT, creator.clone(), creator.clone())
+            DataKey::CreatorFeatureData(1, creator.clone(), creator.clone())
         }
 
         /// Absolute live-until ledger the contract last set for `creator`'s
@@ -503,23 +495,23 @@ pub mod constants {
         }
 
         pub fn auction_config(creator: &Address) -> DataKey {
-            DataKey::CreatorFeatureData(Self::FEAT_AUCTION, creator.clone(), creator.clone())
+            DataKey::CreatorFeatureData(2, creator.clone(), creator.clone())
         }
 
         pub fn stake_unlock_ledger(creator: &Address, holder: &Address) -> DataKey {
-            DataKey::CreatorFeatureData(Self::FEAT_STAKE_UNLOCK, creator.clone(), holder.clone())
+            DataKey::CreatorFeatureData(6, creator.clone(), holder.clone())
         }
 
         pub fn total_staked(creator: &Address) -> DataKey {
-            DataKey::CreatorFeatureData(Self::FEAT_TOTAL_STAKED, creator.clone(), creator.clone())
+            DataKey::CreatorFeatureData(3, creator.clone(), creator.clone())
         }
 
         pub fn staking_rewards_pool(creator: &Address) -> DataKey {
-            DataKey::CreatorFeatureData(Self::FEAT_REWARDS_POOL, creator.clone(), creator.clone())
+            DataKey::CreatorFeatureData(4, creator.clone(), creator.clone())
         }
 
         pub fn holder_cap_bps(creator: &Address) -> DataKey {
-            DataKey::CreatorFeatureData(Self::FEAT_HOLDER_CAP, creator.clone(), creator.clone())
+            DataKey::CreatorFeatureData(5, creator.clone(), creator.clone())
         }
 
         pub fn last_buy_timestamp(creator: &Address, holder: &Address) -> DataKey {
@@ -890,7 +882,7 @@ pub enum DataKey {
     /// distinguishes royalty_config(0), curve_exponent(1), auction_config(2),
     /// total_staked(3), staking_rewards_pool(4), holder_cap_bps(5),
     /// stake_unlock_ledger(6).
-    CreatorFeatureData(u8, Address, Address),
+    CreatorFeatureData(u32, Address, Address),
     /// Ledger timestamp of a holder's most recent buy for a creator.
     LastBuyTimestamp(Address, Address),
     /// Protocol trade fee in basis points.
