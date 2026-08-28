@@ -100,6 +100,30 @@ pub enum ContractError {
     CircuitBreakerTriggered = 50,
 }
 
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+/// Error variants for the co-creator removal, pre-launch auction, and
+/// staking reward claim entrypoints.
+///
+/// These live in a separate error type from [`ContractError`] rather than as
+/// additional variants there: the Soroban contract spec format caps a single
+/// `#[contracterror]` enum at 50 cases (`SCSpecUDTErrorEnumV0.cases<50>`),
+/// and `ContractError` is already at that limit.
+pub enum FeatureError {
+    Unauthorized = 1,
+    NotRegistered = 2,
+    Overflow = 3,
+    ProtocolPaused = 4,
+    NotPositiveAmount = 5,
+    NoCoCreatorSet = 6,
+    AuctionAlreadyStarted = 7,
+    NoAuctionConfigured = 8,
+    InvalidAuctionConfig = 9,
+    StakeLockActive = 10,
+    NoStakeFound = 11,
+}
+
 pub mod fee {
     use crate::ContractError;
 
@@ -463,6 +487,22 @@ pub mod constants {
         pub fn vesting_claimed(creator: &Address, beneficiary: &Address) -> DataKey {
             DataKey::VestingClaimed(creator.clone(), beneficiary.clone())
         }
+
+        pub fn auction_config(creator: &Address) -> DataKey {
+            DataKey::AuctionConfig(creator.clone())
+        }
+
+        pub fn stake_unlock_ledger(creator: &Address, holder: &Address) -> DataKey {
+            DataKey::StakeUnlockLedger(creator.clone(), holder.clone())
+        }
+
+        pub fn total_staked(creator: &Address) -> DataKey {
+            DataKey::TotalStaked(creator.clone())
+        }
+
+        pub fn staking_rewards_pool(creator: &Address) -> DataKey {
+            DataKey::StakingRewardsPool(creator.clone())
+        }
     }
 
     fn creator_key(creator: &Address) -> DataKey {
@@ -724,6 +764,18 @@ pub const MAX_BATCH_BUY_SIZE: usize = 5;
 
 /// Maximum royalty fee basis points (5%).
 pub const MAX_ROYALTY_BPS: u32 = 500;
+
+/// Maximum number of keys a pre-launch auction can allocate at the fixed
+/// auction price before the bonding curve takes over.
+pub const MAX_AUCTION_SUPPLY: u32 = 10_000;
+
+/// Lock duration for staked keys before a reward claim is permitted (30 days
+/// at 5s per ledger).
+pub const STAKE_LOCK_LEDGERS: u32 = 518_400;
+
+/// Share of each protocol fee collection routed into a creator's staking
+/// rewards pool (10%), on top of the existing treasury/recipient split.
+pub const STAKING_REWARD_SHARE_BPS: u32 = 1_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[contracttype]
@@ -1655,6 +1707,49 @@ fn read_lockup_duration_secs(env: &Env) -> Option<u64> {
         .get(&soroban_sdk::symbol_short!("lck_dur"))
 }
 
+/// Reads the accumulated staking rewards pool balance for a creator, returning `0` when none is stored.
+pub fn read_staking_rewards_pool(env: &Env, creator: &Address) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&constants::storage::staking_rewards_pool(creator))
+        .unwrap_or(0)
+}
+
+/// Reads the total keys currently staked across all holders for a creator.
+pub fn read_total_staked(env: &Env, creator: &Address) -> u32 {
+    env.storage()
+        .persistent()
+        .get(&constants::storage::total_staked(creator))
+        .unwrap_or(0)
+}
+
+/// Routes a share of a protocol fee collection into the creator's staking rewards pool.
+///
+/// This is additive bookkeeping on top of the existing treasury/protocol-fee-recipient
+/// split — it does not reduce what those balances receive, so existing fee-accounting
+/// invariants are unaffected. [`CreatorKeysContract::claim_stake_reward`] pays stakers
+/// out of this dedicated pool.
+fn credit_staking_rewards_pool(
+    env: &Env,
+    creator: &Address,
+    protocol_fee: i128,
+) -> Result<(), ContractError> {
+    if protocol_fee <= 0 {
+        return Ok(());
+    }
+    let share = fee::apply_percentage_fee(protocol_fee, STAKING_REWARD_SHARE_BPS)
+        .ok_or(ContractError::Overflow)?;
+    if share <= 0 {
+        return Ok(());
+    }
+    let key = constants::storage::staking_rewards_pool(creator);
+    let updated = read_staking_rewards_pool(env, creator)
+        .checked_add(share)
+        .ok_or(ContractError::Overflow)?;
+    env.storage().persistent().set(&key, &updated);
+    Ok(())
+}
+
 /// Archive retention configuration module with canonical defaults.
 pub mod retention {
     use super::PartitionStrategy;
@@ -1748,6 +1843,7 @@ fn accrue_sell_trade_fees(env: &Env, creator: &Address, price: i128) -> Result<(
         CreatorKeysContract::compute_fees_for_payment(env.clone(), net_price)?;
     credit_creator_fee(env, creator, creator_fee)?;
     credit_treasury_balance(env, protocol_fee)?;
+    credit_staking_rewards_pool(env, creator, protocol_fee)?;
 
     if env
         .storage()
@@ -1786,6 +1882,40 @@ fn resolve_quote_inputs(env: &Env, creator: &Address) -> Result<Option<i128>, Co
     };
 
     let profile = read_registered_creator_profile(env, creator)?;
+    let curve_price = compute_bonding_curve_price(env, creator, normalized, profile.supply)?;
+    normalize_quote_amount(curve_price)
+}
+
+/// Resolves the price [`CreatorKeysContract::get_buy_quote`] should report for the next
+/// buy, mirroring [`CreatorKeysContract::buy_key`]'s own price resolution: while the
+/// creator's supply is below a configured auction's `auction_supply`, the fixed auction
+/// price applies instead of the bonding curve.
+///
+/// Preserves [`resolve_quote_inputs`]'s error-priority ordering (missing base price is
+/// reported before an unregistered creator) for every case that isn't auction-specific.
+fn resolve_buy_quote_price(env: &Env, creator: &Address) -> Result<Option<i128>, ContractError> {
+    let base_price: i128 = env
+        .storage()
+        .persistent()
+        .get(&constants::storage::KEY_PRICE)
+        .ok_or(ContractError::KeyPriceNotSet)?;
+
+    let Some(normalized) = normalize_quote_amount(base_price)? else {
+        return Ok(None);
+    };
+
+    let profile = read_registered_creator_profile(env, creator)?;
+
+    let auction_config: Option<AuctionConfig> = env
+        .storage()
+        .persistent()
+        .get(&constants::storage::auction_config(creator));
+    if let Some(config) = auction_config {
+        if profile.supply < config.auction_supply {
+            return normalize_quote_amount(config.auction_price);
+        }
+    }
+
     let curve_price = compute_bonding_curve_price(env, creator, normalized, profile.supply)?;
     normalize_quote_amount(curve_price)
 }
@@ -2370,40 +2500,60 @@ impl CreatorKeysContract {
 
         let mut profile: CreatorProfile = read_registered_creator_profile(&env, &creator)?;
         assert_whitelist_allows_buy(&env, &profile, &buyer)?;
-        let pre_price = compute_bonding_curve_price(&env, &creator, base_price, profile.supply)?;
 
-        // Circuit breaker pre/post price check
-        let post_supply = profile
-            .supply
-            .checked_add(1)
-            .ok_or(ContractError::Overflow)?;
-        let post_price = compute_bonding_curve_price(&env, &creator, base_price, post_supply)?;
+        let auction_config_key = constants::storage::auction_config(&creator);
+        let mut auction_config: Option<AuctionConfig> =
+            env.storage().persistent().get(&auction_config_key);
+        let in_auction = auction_config
+            .as_ref()
+            .map(|config| profile.supply < config.auction_supply)
+            .unwrap_or(false);
 
-        let threshold_pct: u32 = env
-            .storage()
-            .persistent()
-            .get(&constants::storage::CIRCUIT_BREAKER_THRESHOLD)
-            .unwrap_or(30);
+        let price = if in_auction {
+            // Auction-phase buys settle at the fixed auction price. The
+            // circuit breaker only guards bonding-curve price movement, so
+            // it does not apply while the fixed-price auction is active.
+            auction_config
+                .as_ref()
+                .expect("in_auction implies auction_config is Some")
+                .auction_price
+        } else {
+            let pre_price =
+                compute_bonding_curve_price(&env, &creator, base_price, profile.supply)?;
 
-        if pre_price > 0 {
-            let price_change = post_price.saturating_sub(pre_price);
-            let max_change = (pre_price as u128)
-                .checked_mul(threshold_pct as u128)
-                .ok_or(ContractError::Overflow)?
-                / 100;
-            if (price_change as u128) >= max_change {
-                env.events().publish(
-                    (events::circuit_breaker_triggered_topics(),),
-                    events::CircuitBreakerTriggeredEvent {
-                        pre_price,
-                        post_price,
-                    },
-                );
-                return Err(ContractError::CircuitBreakerTriggered);
+            // Circuit breaker pre/post price check
+            let post_supply = profile
+                .supply
+                .checked_add(1)
+                .ok_or(ContractError::Overflow)?;
+            let post_price = compute_bonding_curve_price(&env, &creator, base_price, post_supply)?;
+
+            let threshold_pct: u32 = env
+                .storage()
+                .persistent()
+                .get(&constants::storage::CIRCUIT_BREAKER_THRESHOLD)
+                .unwrap_or(30);
+
+            if pre_price > 0 {
+                let price_change = post_price.saturating_sub(pre_price);
+                let max_change = (pre_price as u128)
+                    .checked_mul(threshold_pct as u128)
+                    .ok_or(ContractError::Overflow)?
+                    / 100;
+                if (price_change as u128) >= max_change {
+                    env.events().publish(
+                        (events::circuit_breaker_triggered_topics(),),
+                        events::CircuitBreakerTriggeredEvent {
+                            pre_price,
+                            post_price,
+                        },
+                    );
+                    return Err(ContractError::CircuitBreakerTriggered);
+                }
             }
-        }
 
-        let price = pre_price;
+            pre_price
+        };
 
         assert_buy_price_slippage(price, max_price)?;
 
@@ -2515,6 +2665,7 @@ impl CreatorKeysContract {
                     .ok_or(ContractError::Overflow)?;
 
             credit_creator_fee(&env, &creator, creator_fee)?;
+            credit_staking_rewards_pool(&env, &creator, protocol_fee)?;
 
             // Split protocol fee between treasury and referrer only when a referrer is provided
             if let Some(referrer_addr) = referrer {
@@ -2557,17 +2708,41 @@ impl CreatorKeysContract {
             }
         }
 
-        let buy_event_data = events::KeysBoughtEvent {
-            buyer: buyer.clone(),
-            creator_id: creator.clone(),
-            quantity: 1,
-            price_paid: price,
-            new_supply: profile.supply,
-            ledger: env.ledger().sequence(),
-        };
+        if in_auction {
+            let mut config = auction_config
+                .take()
+                .expect("in_auction implies auction_config is Some");
+            config.auction_sold = config
+                .auction_sold
+                .checked_add(1)
+                .ok_or(ContractError::Overflow)?;
+            env.storage().persistent().set(&auction_config_key, &config);
 
-        env.events()
-            .publish(events::buy_event_topics(&creator, &buyer), buy_event_data);
+            env.events().publish(
+                events::auction_purchase_topics(&creator, &buyer),
+                events::AuctionPurchaseEvent {
+                    buyer: buyer.clone(),
+                    creator_id: creator.clone(),
+                    quantity: 1,
+                    price_paid: price,
+                    new_supply: profile.supply,
+                    auction_sold: config.auction_sold,
+                    ledger: env.ledger().sequence(),
+                },
+            );
+        } else {
+            let buy_event_data = events::KeysBoughtEvent {
+                buyer: buyer.clone(),
+                creator_id: creator.clone(),
+                quantity: 1,
+                price_paid: price,
+                new_supply: profile.supply,
+                ledger: env.ledger().sequence(),
+            };
+
+            env.events()
+                .publish(events::buy_event_topics(&creator, &buyer), buy_event_data);
+        }
 
         // Extend TTL for creator storage after successful buy
         extend_creator_ttl(&env, &creator);
@@ -3828,9 +4003,11 @@ impl CreatorKeysContract {
     /// Read-only view: returns a quote for buying a key.
     ///
     /// Returns a [`QuoteResponse`] containing the current price and fee breakdown.
-    /// Fees are calculated based on the fixed key price.
+    /// Fees are calculated based on the fixed key price, or the fixed auction price
+    /// while a pre-launch auction configured via [`Self::configure_auction`] is still
+    /// active for `creator` — mirroring exactly what [`Self::buy_key`] would charge.
     pub fn get_buy_quote(env: Env, creator: Address) -> Result<QuoteResponse, ContractError> {
-        let Some(price) = resolve_quote_inputs(&env, &creator)? else {
+        let Some(price) = resolve_buy_quote_price(&env, &creator)? else {
             return Ok(zero_quote_response());
         };
         let (creator_fee, protocol_fee) = Self::compute_fees_for_payment(env.clone(), price)?;
@@ -4533,6 +4710,25 @@ impl CreatorKeysContract {
             .set(&staked_balance_key, &new_staked);
         extend_key_ttl_to_full_window(&env, &staked_balance_key);
 
+        let total_staked_key = constants::storage::total_staked(&creator);
+        let new_total_staked = read_total_staked(&env, &creator)
+            .checked_add(amount)
+            .ok_or(ContractError::Overflow)?;
+        env.storage()
+            .persistent()
+            .set(&total_staked_key, &new_total_staked);
+
+        // Refresh the reward-claim lock window on every additional stake so
+        // `claim_stake_reward` always measures eligibility from the most
+        // recent stake.
+        let unlock_key = constants::storage::stake_unlock_ledger(&creator, &holder);
+        let unlock_ledger = env
+            .ledger()
+            .sequence()
+            .checked_add(STAKE_LOCK_LEDGERS)
+            .ok_or(ContractError::Overflow)?;
+        env.storage().persistent().set(&unlock_key, &unlock_ledger);
+
         Ok(())
     }
 
@@ -4579,11 +4775,24 @@ impl CreatorKeysContract {
 
         if new_staked == 0 {
             env.storage().persistent().remove(&staked_balance_key);
+            env.storage()
+                .persistent()
+                .remove(&constants::storage::stake_unlock_ledger(&creator, &holder));
         } else {
             env.storage()
                 .persistent()
                 .set(&staked_balance_key, &new_staked);
             extend_key_ttl_to_full_window(&env, &staked_balance_key);
+        }
+
+        let total_staked_key = constants::storage::total_staked(&creator);
+        let new_total_staked = read_total_staked(&env, &creator).saturating_sub(amount);
+        if new_total_staked == 0 {
+            env.storage().persistent().remove(&total_staked_key);
+        } else {
+            env.storage()
+                .persistent()
+                .set(&total_staked_key, &new_total_staked);
         }
 
         Ok(())
@@ -5526,249 +5735,42 @@ impl CreatorKeysContract {
     }
 
     // =========================================================================
-    // #780 — Key metadata initialisation and update
+    // #791 — Co-creator removal
     // =========================================================================
 
-    /// Initialises the key metadata for a registered creator.
+    /// Removes a creator's configured co-creator split, restoring 100% of all
+    /// future royalties to the creator.
     ///
-    /// Callable only by the creator (`require_auth`). Stores the provided
-    /// [`KeyMetadata`] in persistent storage under [`DataKey::CreatorMetadata`].
-    /// The `name` field must not be empty and must not exceed
-    /// [`METADATA_NAME_MAX_LEN`] bytes. The `bio` and `avatar_uri` fields are
-    /// validated against [`METADATA_BIO_MAX_LEN`] and
-    /// [`METADATA_AVATAR_URI_MAX_LEN`] respectively.
-    ///
-    /// Panics with [`ContractError::AlreadyRegistered`] if metadata has already
-    /// been initialised for this creator.
-    pub fn initialise_key(
-        env: Env,
-        creator: Address,
-        metadata: KeyMetadata,
-    ) -> Result<(), ContractError> {
-        creator.require_auth();
-        assert_not_paused(&env)?;
-
-        // Verify creator is registered
-        let _profile = read_registered_creator_profile(&env, &creator)?;
-
-        // Ensure metadata has not already been initialised
-        let existing = read_creator_metadata(&env, &creator);
-        if existing.is_some() {
-            return Err(ContractError::AlreadyRegistered);
-        }
-
-        validate_key_metadata(&metadata)?;
-        write_creator_metadata(&env, &creator, &metadata);
-
-        Ok(())
-    }
-
-    /// Updates the key metadata for a creator.
-    ///
-    /// Callable only by the creator (`require_auth`). For each field wrapped in
-    /// `Some`, the stored value is overwritten; `None` fields are left unchanged.
+    /// Only callable by the creator (`caller` must equal `creator`).
     ///
     /// # Errors
     ///
-    /// - [`ContractError::NotRegistered`] — metadata has not been set via
-    ///   [`initialise_key`] for this `creator`.
-    /// - [`ContractError::HandleTooLong`] — the provided `name` exceeds
-    ///   [`METADATA_NAME_MAX_LEN`] bytes.
-    /// - [`ContractError::Unauthorized`] — the caller is not the key creator.
-    ///
-    /// # Events
-    ///
-    /// Emits a [`events::METADATA_UPDATED_EVENT_NAME`] event listing only the
-    /// fields that were changed.
-    pub fn update_metadata(
+    /// - [`FeatureError::Unauthorized`] if `caller` is not `creator`
+    /// - [`FeatureError::NoCoCreatorSet`] if no co-creator is configured for `creator`
+    pub fn remove_co_creator(
         env: Env,
         creator: Address,
-        name: Option<String>,
-        bio: Option<String>,
-        avatar_uri: Option<String>,
-    ) -> Result<(), ContractError> {
-        creator.require_auth();
-        assert_not_paused(&env)?;
-
-        let mut metadata =
-            read_creator_metadata(&env, &creator).ok_or(ContractError::NotRegistered)?;
-
-        let mut name_changed = false;
-        let mut bio_changed = false;
-        let mut avatar_uri_changed = false;
-
-        if let Some(new_name) = name {
-            assert_metadata_field_length(
-                &new_name,
-                METADATA_NAME_MAX_LEN,
-                ContractError::HandleTooLong,
-            )?;
-            if new_name != metadata.name {
-                metadata.name = new_name;
-                name_changed = true;
-            }
+        caller: Address,
+    ) -> Result<(), FeatureError> {
+        caller.require_auth();
+        if caller != creator {
+            return Err(FeatureError::Unauthorized);
         }
 
-        if let Some(new_bio) = bio {
-            assert_metadata_field_length(
-                &new_bio,
-                METADATA_BIO_MAX_LEN,
-                ContractError::HandleTooLong,
-            )?;
-            if new_bio != metadata.bio {
-                metadata.bio = new_bio;
-                bio_changed = true;
-            }
-        }
-
-        if let Some(new_avatar_uri) = avatar_uri {
-            assert_metadata_field_length(
-                &new_avatar_uri,
-                METADATA_AVATAR_URI_MAX_LEN,
-                ContractError::HandleTooLong,
-            )?;
-            if new_avatar_uri != metadata.avatar_uri {
-                metadata.avatar_uri = new_avatar_uri;
-                avatar_uri_changed = true;
-            }
-        }
-
-        if !name_changed && !bio_changed && !avatar_uri_changed {
-            return Ok(());
-        }
-
-        write_creator_metadata(&env, &creator, &metadata);
-
-        env.events().publish(
-            events::metadata_updated_topics(&creator),
-            events::MetadataUpdatedEvent {
-                creator,
-                name_changed,
-                bio_changed,
-                avatar_uri_changed,
-            },
-        );
-
-        Ok(())
-    }
-
-    /// Read-only view: returns the key metadata for a creator.
-    ///
-    /// Returns `None` if metadata has not been initialised.
-    pub fn get_key_metadata(env: Env, creator: Address) -> Option<KeyMetadata> {
-        read_creator_metadata(&env, &creator)
-    }
-
-    /// Convenience initialiser used by integration tests.
-    ///
-    /// Sets the protocol admin, treasury address and initial trade fee in one
-    /// call. Panics with `AlreadyRegistered` if the protocol fee config has
-    /// already been set (same as calling `set_fee_config` twice).
-    pub fn initialize(
-        env: Env,
-        admin: Address,
-        treasury: Address,
-        fee_bps: i128,
-    ) -> Result<(), ContractError> {
-        admin.require_auth();
-        assert_is_admin(&env, &admin)?;
-
-        env.storage()
-            .persistent()
-            .set(&constants::storage::ADMIN_ADDRESS, &admin);
-        env.storage()
-            .persistent()
-            .set(&constants::storage::TREASURY_ADDRESS, &treasury);
-
-        let protocol_bps = fee_bps as u32;
-        if protocol_bps > 0 {
-            let creator_bps = fee::BPS_MAX
-                .checked_sub(protocol_bps)
-                .ok_or(ContractError::InvalidFeeConfig)?;
-            fee::assert_valid_fee_bps(creator_bps, protocol_bps)?;
-            let config = fee::FeeConfig {
-                creator_bps,
-                protocol_bps,
-            };
-            env.storage()
-                .persistent()
-                .set(&constants::storage::FEE_CONFIG, &config);
-            extend_key_ttl_to_full_window(&env, &constants::storage::FEE_CONFIG);
-        }
-
-        Ok(())
-    }
-
-    /// Batch buy multiple creator keys in a single transaction.
-    pub fn batch_buy(
-        env: Env,
-        buyer: Address,
-        orders: soroban_sdk::Vec<(Address, u32)>,
-    ) -> Result<soroban_sdk::Vec<BatchBuyOrderResult>, ContractError> {
-        buyer.require_auth();
-        if orders.is_empty() {
-            return Err(ContractError::NotPositiveAmount);
-        }
-        if orders.len() > MAX_BATCH_BUY_SIZE as u32 {
-            return Err(ContractError::AirdropRecipientLimitExceeded);
-        }
-        let mut results = soroban_sdk::Vec::new(&env);
-        let base_price: i128 = env
+        let key = constants::storage::co_creator(&creator);
+        let config: CoCreatorConfig = env
             .storage()
             .persistent()
-            .get(&constants::storage::KEY_PRICE)
-            .ok_or(ContractError::KeyPriceNotSet)?;
-        for order in orders.iter() {
-            let (creator, quantity) = order;
-            let mut total_paid: i128 = 0;
-            for _ in 0..quantity {
-                let profile = read_registered_creator_profile(&env, &creator)?;
-                let price =
-                    compute_bonding_curve_price(&env, &creator, base_price, profile.supply)?;
-                let _supply =
-                    Self::buy_key(env.clone(), creator.clone(), buyer.clone(), price, None)?;
-                total_paid = total_paid
-                    .checked_add(price)
-                    .ok_or(ContractError::Overflow)?;
-            }
-            results.push_back(BatchBuyOrderResult {
-                creator,
-                quantity,
-                price_paid: total_paid,
-            });
-        }
-        Ok(results)
-    }
+            .get(&key)
+            .ok_or(FeatureError::NoCoCreatorSet)?;
 
-    /// Sets the royalty fee configuration for a creator.
-    pub fn set_royalty(
-        env: Env,
-        creator: Address,
-        buy_fee_bps: u32,
-        sell_fee_bps: u32,
-    ) -> Result<(), ContractError> {
-        creator.require_auth();
-        let _profile = read_registered_creator_profile(&env, &creator)?;
-
-        if buy_fee_bps > MAX_ROYALTY_BPS || sell_fee_bps > MAX_ROYALTY_BPS {
-            return Err(ContractError::InvalidFeeConfig);
-        }
-
-        let config = RoyaltyConfig {
-            buy_fee_bps,
-            sell_fee_bps,
-        };
-        env.storage()
-            .persistent()
-            .set(&constants::storage::royalty_config(&creator), &config);
-        extend_key_ttl_to_full_window(&env, &constants::storage::royalty_config(&creator));
+        env.storage().persistent().remove(&key);
 
         env.events().publish(
-            events::royalty_updated_topics(&creator),
-            events::RoyaltyUpdatedEvent {
-                creator,
-                buy_fee_bps,
-                sell_fee_bps,
+            events::co_creator_removed_topics(&creator),
+            events::CoCreatorRemovedEvent {
+                creator_id: creator,
+                co_creator: config.address,
                 ledger: env.ledger().sequence(),
             },
         );
@@ -5776,39 +5778,230 @@ impl CreatorKeysContract {
         Ok(())
     }
 
-    /// Read-only view: returns the royalty configuration for a creator.
-    pub fn get_royalty_config(env: Env, creator: Address) -> Option<RoyaltyConfig> {
-        read_royalty_config(&env, &creator)
-    }
+    // =========================================================================
+    // #787 / #793 / #790 — Pre-launch auction phase
+    // =========================================================================
 
-    /// Migrates the bonding curve exponent for one or more creators.
-    pub fn migrate_curve(
+    /// Configures a fixed-price pre-launch auction phase for a creator's keys.
+    ///
+    /// While `total_supply` is below `auction_supply`, [`Self::buy_key`] sells
+    /// at `auction_price` instead of the bonding curve price; the contract
+    /// transitions back to the curve automatically once the auction supply is
+    /// exhausted. Only callable by the creator, and only before any keys have
+    /// been sold.
+    ///
+    /// # Errors
+    ///
+    /// - [`FeatureError::Unauthorized`] if `caller` is not `creator`
+    /// - [`FeatureError::NotRegistered`] if `creator` is not a registered creator
+    /// - [`FeatureError::AuctionAlreadyStarted`] if the creator's supply is already nonzero
+    /// - [`FeatureError::NotPositiveAmount`] if `auction_price` is not positive
+    /// - [`FeatureError::InvalidAuctionConfig`] if `auction_supply` is zero or exceeds
+    ///   [`MAX_AUCTION_SUPPLY`]
+    pub fn configure_auction(
         env: Env,
-        admin: Address,
-        exponent: u32,
-        key_ids: soroban_sdk::Vec<Address>,
-    ) -> Result<(), ContractError> {
-        admin.require_auth();
-        assert_is_admin(&env, &admin)?;
-
-        if !(1..=5).contains(&exponent) {
-            return Err(ContractError::InvalidFeeConfig);
+        creator: Address,
+        caller: Address,
+        auction_price: i128,
+        auction_supply: u32,
+    ) -> Result<(), FeatureError> {
+        caller.require_auth();
+        if caller != creator {
+            return Err(FeatureError::Unauthorized);
         }
 
-        for creator in key_ids.iter() {
-            let _profile = read_registered_creator_profile(&env, &creator)?;
-            env.storage()
-                .persistent()
-                .set(&constants::storage::curve_exponent(&creator), &exponent);
-            extend_key_ttl_to_full_window(&env, &constants::storage::curve_exponent(&creator));
+        let profile = read_registered_creator_profile(&env, &creator)
+            .map_err(|_| FeatureError::NotRegistered)?;
+        if profile.supply > 0 {
+            return Err(FeatureError::AuctionAlreadyStarted);
         }
+        if auction_price <= 0 {
+            return Err(FeatureError::NotPositiveAmount);
+        }
+        if auction_supply == 0 || auction_supply > MAX_AUCTION_SUPPLY {
+            return Err(FeatureError::InvalidAuctionConfig);
+        }
+
+        let config = AuctionConfig {
+            auction_price,
+            auction_supply,
+            auction_sold: 0,
+        };
+        let key = constants::storage::auction_config(&creator);
+        env.storage().persistent().set(&key, &config);
+        extend_key_ttl_to_full_window(&env, &key);
+
+        env.events().publish(
+            events::auction_configured_topics(&creator),
+            events::AuctionConfiguredEvent {
+                creator_id: creator,
+                auction_price,
+                auction_supply,
+            },
+        );
 
         Ok(())
     }
 
-    /// Read-only view: returns the bonding curve exponent for a creator.
-    pub fn get_curve_exponent(env: Env, creator: Address) -> Option<u32> {
-        read_curve_exponent(&env, &creator)
+    /// Cancels a creator's configured auction before any auction keys have sold.
+    ///
+    /// Only callable by the creator.
+    ///
+    /// # Errors
+    ///
+    /// - [`FeatureError::Unauthorized`] if `caller` is not `creator`
+    /// - [`FeatureError::NoAuctionConfigured`] if no auction config exists for `creator`
+    /// - [`FeatureError::AuctionAlreadyStarted`] if `auction_sold` is greater than zero
+    pub fn cancel_auction(
+        env: Env,
+        creator: Address,
+        caller: Address,
+    ) -> Result<(), FeatureError> {
+        caller.require_auth();
+        if caller != creator {
+            return Err(FeatureError::Unauthorized);
+        }
+
+        let key = constants::storage::auction_config(&creator);
+        let config: AuctionConfig = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(FeatureError::NoAuctionConfigured)?;
+
+        if config.auction_sold > 0 {
+            return Err(FeatureError::AuctionAlreadyStarted);
+        }
+
+        env.storage().persistent().remove(&key);
+
+        env.events().publish(
+            events::auction_cancelled_topics(&creator),
+            events::AuctionCancelledEvent {
+                creator_id: creator,
+                auction_price: config.auction_price,
+                auction_supply: config.auction_supply,
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Read-only view: returns the configured auction state for a creator, if any.
+    pub fn get_auction_config(env: Env, creator: Address) -> Option<AuctionConfig> {
+        env.storage()
+            .persistent()
+            .get(&constants::storage::auction_config(&creator))
+    }
+
+    // =========================================================================
+    // #786 / #789 — Staking reward claim
+    // =========================================================================
+
+    /// Unlocks a holder's staked keys after the lock period and pays out
+    /// their pro-rata share of the creator's staking rewards pool.
+    ///
+    /// Callable by any wallet with an active stake for `creator`. The reward
+    /// is `staking_pool_balance * staked_quantity / total_staked_quantity`,
+    /// capped at the pool's current balance. On success the full staked
+    /// quantity is unlocked back into the holder's liquid balance.
+    ///
+    /// # Errors
+    ///
+    /// - [`FeatureError::NoStakeFound`] if the caller has no active stake for `creator`
+    /// - [`FeatureError::StakeLockActive`] if the current ledger is before the unlock ledger
+    /// - [`FeatureError::ProtocolPaused`] if the contract is paused
+    pub fn claim_stake_reward(
+        env: Env,
+        creator: Address,
+        holder: Address,
+    ) -> Result<i128, FeatureError> {
+        holder.require_auth();
+        assert_not_paused(&env).map_err(|_| FeatureError::ProtocolPaused)?;
+
+        let staked_balance_key = constants::storage::staked_balance(&creator, &holder);
+        let staked_quantity: u32 = env
+            .storage()
+            .persistent()
+            .get(&staked_balance_key)
+            .unwrap_or(0);
+        if staked_quantity == 0 {
+            return Err(FeatureError::NoStakeFound);
+        }
+
+        let unlock_key = constants::storage::stake_unlock_ledger(&creator, &holder);
+        let unlock_ledger: u32 = env
+            .storage()
+            .persistent()
+            .get(&unlock_key)
+            .ok_or(FeatureError::NoStakeFound)?;
+        if env.ledger().sequence() < unlock_ledger {
+            return Err(FeatureError::StakeLockActive);
+        }
+
+        let total_staked = read_total_staked(&env, &creator);
+        let pool_balance = read_staking_rewards_pool(&env, &creator);
+        let reward = if total_staked == 0 || pool_balance <= 0 {
+            0
+        } else {
+            let raw_share = pool_balance
+                .checked_mul(i128::from(staked_quantity))
+                .ok_or(FeatureError::Overflow)?
+                / i128::from(total_staked);
+            raw_share.min(pool_balance)
+        };
+
+        // Unlock: clear the stake and its lock record, mirroring `unstake_keys`.
+        env.storage().persistent().remove(&staked_balance_key);
+        env.storage().persistent().remove(&unlock_key);
+
+        let total_staked_key = constants::storage::total_staked(&creator);
+        let new_total_staked = total_staked.saturating_sub(staked_quantity);
+        if new_total_staked == 0 {
+            env.storage().persistent().remove(&total_staked_key);
+        } else {
+            env.storage()
+                .persistent()
+                .set(&total_staked_key, &new_total_staked);
+        }
+
+        if reward > 0 {
+            let pool_key = constants::storage::staking_rewards_pool(&creator);
+            let remaining_pool = pool_balance.saturating_sub(reward);
+            env.storage().persistent().set(&pool_key, &remaining_pool);
+        }
+
+        env.events().publish(
+            events::stake_reward_claimed_topics(&creator, &holder),
+            events::StakeRewardClaimedEvent {
+                wallet: holder,
+                key_id: creator,
+                quantity_unlocked: staked_quantity,
+                reward_amount: reward,
+                ledger: env.ledger().sequence(),
+            },
+        );
+
+        Ok(reward)
+    }
+
+    /// Read-only view: returns the total keys currently staked across all
+    /// holders for a creator.
+    pub fn get_total_staked(env: Env, creator: Address) -> u32 {
+        read_total_staked(&env, &creator)
+    }
+
+    /// Read-only view: returns the current staking rewards pool balance for a creator.
+    pub fn get_staking_rewards_pool(env: Env, creator: Address) -> i128 {
+        read_staking_rewards_pool(&env, &creator)
+    }
+
+    /// Read-only view: returns the ledger sequence at which a holder's stake
+    /// for a creator unlocks, if the holder has an active stake.
+    pub fn get_stake_unlock_ledger(env: Env, creator: Address, holder: Address) -> Option<u32> {
+        env.storage()
+            .persistent()
+            .get(&constants::storage::stake_unlock_ledger(&creator, &holder))
     }
 }
 #[cfg(test)]
