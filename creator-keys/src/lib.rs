@@ -774,6 +774,9 @@ pub const KEY_DECIMALS: u32 = 7;
 /// buy or sell operation to prevent active creator state from expiring.
 pub const CREATOR_TTL_LEDGERS: u32 = 6311520; // ~2 years at 5s per ledger
 
+/// Maximum staking lock extension from the current ledger (~180 days at 5 seconds per ledger).
+pub const MAX_STAKE_LOCK_LEDGERS: u32 = 3_110_400;
+
 /// Minimum remaining TTL (in ledgers) that triggers a TTL extension event.
 ///
 /// When the creator key's remaining TTL drops strictly below this threshold,
@@ -1140,7 +1143,6 @@ pub struct AuctionConfig {
     pub auction_supply: u32,
     pub auction_sold: u32,
 }
-
 /// Optional immutable collaborator split configured at creator registration.
 ///
 /// `share_bps` is the co-creator's share of the creator fee, not of the full
@@ -5822,6 +5824,8 @@ impl CreatorKeysContract {
 
         Ok(())
     }
+
+
 
     /// Unstakes a specified amount of keys for a holder.
     ///
