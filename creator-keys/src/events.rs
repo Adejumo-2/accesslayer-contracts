@@ -546,8 +546,6 @@ pub const TREASURY_WITHDRAWAL_EVENT_NAME: Symbol = symbol_short!("treas_out");
 /// Event name for creator storage TTL extension.
 pub const TTL_EXTENDED_EVENT_NAME: Symbol = symbol_short!("ttl_ext");
 
-
-
 /// Stable field order for treasury withdrawal event payloads.
 pub const TREASURY_WITHDRAWAL_DATA_FIELDS: [&str; 4] =
     ["amount", "recipient", "remaining_balance", "ledger"];
@@ -1239,7 +1237,6 @@ pub struct RoyaltyUpdatedEvent {
 pub fn royalty_updated_topics(creator: &Address) -> (Symbol, Address) {
     (ROYALTY_UPDATED_EVENT_NAME, creator.clone())
 }
-
 /// Stable fee collection event payload for downstream indexers.
 ///
 /// Event shape:

@@ -122,9 +122,6 @@ pub enum StakingError {
     NotRegistered = 7,
     /// The contract is paused.
     ProtocolPaused = 8,
-    GlobalTradingHalted = 51,
-    FrozenBalanceExceeded = 52,
-    FreezeQuantityExceedsBalance = 53,
 }
 
 /// Errors raised by co-creator and auction lifecycle entrypoints.
@@ -491,12 +488,24 @@ pub mod constants {
             DataKey::StakingRewardsPool(creator.clone())
         }
 
+        pub fn total_staked(creator: &Address) -> DataKey {
+            DataKey::TotalStaked(creator.clone())
+        }
+
+        pub fn stake_unlock_ledger(creator: &Address, holder: &Address) -> DataKey {
+            DataKey::StakeUnlockLedger(creator.clone(), holder.clone())
+        }
+
         pub fn created_at_ledger(creator: &Address) -> DataKey {
             DataKey::CreatedAtLedger(creator.clone())
         }
 
         pub fn launch_penalty_bps(creator: &Address) -> DataKey {
             DataKey::LaunchPenaltyBps(creator.clone())
+        }
+
+        pub fn auction_config(creator: &Address) -> DataKey {
+            DataKey::AuctionConfig(creator.clone())
         }
 
         pub fn next_stake_id(creator: &Address, holder: &Address) -> StakingKey {
@@ -592,18 +601,6 @@ pub mod constants {
 
         pub fn buy_cooldown(creator: &Address) -> DataKey {
             DataKey::BuyCooldown(creator.clone())
-        }
-
-        pub fn total_staked(creator: &Address) -> DataKey {
-            DataKey::TotalStaked(creator.clone())
-        }
-
-        pub fn stake_unlock_ledger(creator: &Address, holder: &Address) -> DataKey {
-            DataKey::StakeUnlockLedger(creator.clone(), holder.clone())
-        }
-
-        pub fn auction_config(creator: &Address) -> DataKey {
-            DataKey::AuctionConfig(creator.clone())
         }
 
         /// Storage key for a creator's deprecation marker; value is `buyback_price_per_key` (i128).
@@ -1021,7 +1018,6 @@ pub enum DataKey {
     LastBuyTimestamp(Address, Address),
     /// Lockup duration in seconds for sell lockup enforcement.
     LockupDurationSecs,
-    /// Per-creator quorum basis points for governance proposals.
     QuorumBps(Address),
     /// Per-creator holder cap in basis points (max % of supply one wallet may hold).
     HolderCapBps(Address),
@@ -1065,6 +1061,26 @@ pub struct ReinvestResult {
     pub remainder_returned: i128,
 }
 
+/// Internal staking account keys that are not part of the public data-key ABI.
+///
+/// Used to keep [`DataKey`] within Soroban's 50-variant `#[contracttype]` cap;
+/// `NextStakeId` is keyed per `(creator, holder)` pair.
+#[derive(Clone, Debug, PartialEq)]
+#[contracttype]
+pub enum StakingKey {
+    /// Next sequential stake id for a `(creator, holder)` pair -> `u32`.
+    NextStakeId(Address, Address),
+}
+
+/// Configuration for a creator's fixed-price pre-launch auction phase.
+#[derive(Clone, Debug, PartialEq)]
+#[contracttype]
+pub struct AuctionConfig {
+    pub auction_price: i128,
+    pub auction_supply: u32,
+    pub auction_sold: u32,
+}
+
 /// Time-locked key allocation for creator self-vesting.
 ///
 /// When a creator registers, they may optionally lock a portion of keys
@@ -1075,16 +1091,6 @@ pub struct LockedAllocation {
     pub amount: u32,
     pub unlock_ledger: u32,
     pub claimed: bool,
-}
-
-/// Internal staking account keys that are not part of the public data-key ABI.
-///
-/// Used to keep [`DataKey`] within the `#[contracttype]` export limit.
-#[derive(Clone, Debug, PartialEq)]
-#[contracttype]
-pub enum StakingKey {
-    /// Next sequential stake id for a `(creator, holder)` pair -> `u32`.
-    NextStakeId(Address, Address),
 }
 
 /// A single locked staking position held by a holder.
@@ -1135,14 +1141,6 @@ pub struct StakeRewardClaim {
     pub reward: i128,
 }
 
-/// Pre-launch fixed-price auction configuration for a creator key.
-#[derive(Clone, Debug, PartialEq)]
-#[contracttype]
-pub struct AuctionConfig {
-    pub auction_price: i128,
-    pub auction_supply: u32,
-    pub auction_sold: u32,
-}
 /// Optional immutable collaborator split configured at creator registration.
 ///
 /// `share_bps` is the co-creator's share of the creator fee, not of the full
@@ -2829,7 +2827,6 @@ impl CreatorKeysContract {
                 .persistent()
                 .get(&constants::storage::CIRCUIT_BREAKER_THRESHOLD)
                 .unwrap_or(30);
-
             if pre_price > 0 && post_price > pre_price {
                 let price_change = (post_price - pre_price) as u128;
                 let pre_price_u128 = pre_price as u128;
