@@ -1,10 +1,6 @@
 #![cfg(test)]
 
-use crate::{
-    ContractError, CreatorKeysContract, CreatorKeysContractClient, KeyMetadata,
-    RegisterCreatorParams, METADATA_AVATAR_URI_MAX_LEN, METADATA_BIO_MAX_LEN,
-    METADATA_NAME_MAX_LEN,
-};
+use crate::{ContractError, CreatorKeysContract, CreatorKeysContractClient, RegisterCreatorParams};
 use soroban_sdk::{testutils::Address as _, Address, Env, String};
 
 fn setup_test() -> (Env, CreatorKeysContractClient<'static>, Address, Address) {
@@ -17,8 +13,8 @@ fn setup_test() -> (Env, CreatorKeysContractClient<'static>, Address, Address) {
     let admin = Address::generate(&env);
     let treasury = Address::generate(&env);
     client.set_protocol_admin(&admin, &admin);
-    client.set_treasury_address(&admin, &treasury);
     client.set_key_price(&admin, &100i128);
+    client.set_curve_slope(&admin, &100i128);
     client.set_fee_config(&admin, &9000u32, &1000u32);
 
     (env, client, admin, treasury)
@@ -115,22 +111,22 @@ fn test_whitelist_mode_and_permissions() {
     let wallet = Address::generate(&env);
     let attacker = Address::generate(&env);
 
-    // Non-creator caller panics with Unauthorized on whitelist functions
+    // Non-creator caller panics with NotRegistered on whitelist functions
     assert_eq!(
         client.try_enable_whitelist(&attacker),
-        Err(Ok(ContractError::Unauthorized))
+        Err(Ok(ContractError::NotRegistered))
     );
     assert_eq!(
         client.try_disable_whitelist(&attacker),
-        Err(Ok(ContractError::Unauthorized))
+        Err(Ok(ContractError::NotRegistered))
     );
     assert_eq!(
         client.try_add_to_whitelist(&attacker, &wallet),
-        Err(Ok(ContractError::Unauthorized))
+        Err(Ok(ContractError::NotRegistered))
     );
     assert_eq!(
         client.try_remove_from_whitelist(&attacker, &wallet),
-        Err(Ok(ContractError::Unauthorized))
+        Err(Ok(ContractError::NotRegistered))
     );
 
     // Enable whitelist

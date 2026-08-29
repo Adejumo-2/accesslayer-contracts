@@ -1027,10 +1027,7 @@ mod issue_tests {
         let orders: soroban_sdk::Vec<(Address, u32)> = soroban_sdk::Vec::new(&env);
 
         let result = client.try_batch_buy(&buyer, &orders);
-        assert_eq!(
-            result,
-            Err(Ok(ContractError::AirdropRecipientLimitExceeded))
-        );
+        assert_eq!(result, Err(Ok(ContractError::BatchClaimExceedsLimit)));
     }
 
     #[test]
@@ -1064,10 +1061,7 @@ mod issue_tests {
         );
 
         let result = client.try_batch_buy(&buyer, &orders);
-        assert_eq!(
-            result,
-            Err(Ok(ContractError::AirdropRecipientLimitExceeded))
-        );
+        assert_eq!(result, Err(Ok(ContractError::BatchClaimExceedsLimit)));
     }
 
     // =========================================================================
@@ -1106,7 +1100,7 @@ mod issue_tests {
 
         let creator = register_creator(&env, &client, None);
         let result = client.try_set_royalty(&creator, &501, &0);
-        assert_eq!(result, Err(Ok(ContractError::InvalidFeeConfig)));
+        assert_eq!(result, Err(Ok(ContractError::ProtocolFeeExceedsCap)));
     }
 
     #[test]
