@@ -1317,3 +1317,55 @@ pub fn stake_reward_claimed_topics(
 ) -> (Symbol, Address, Address, u32) {
     (STAKE_REWARD_CLAIMED_EVENT_NAME, creator.clone(), holder.clone(), stake_id)
 }
+
+
+// ============================================================================
+// Launch Penalty (#798)
+// ============================================================================
+
+/// Event name for launch penalty applied on sell.
+pub const LAUNCH_PENALTY_APPLIED_EVENT_NAME: Symbol = symbol_short!("lnch_pnl");
+
+/// Stable launch penalty applied event payload for downstream indexers.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct LaunchPenaltyAppliedEvent {
+    /// Address of the creator whose key was sold.
+    pub creator_id: Address,
+    /// Address of the seller.
+    pub seller: Address,
+    /// Launch penalty basis points applied.
+    pub penalty_bps: u32,
+    /// Penalty amount deducted from proceeds.
+    pub penalty_amount: i128,
+    /// Ledger sequence at the time of the sale.
+    pub ledger: u32,
+}
+
+/// Shared launch penalty applied event topics tuple.
+pub fn launch_penalty_applied_topics(
+    creator: &Address,
+    seller: &Address,
+) -> (Symbol, Address, Address) {
+    (LAUNCH_PENALTY_APPLIED_EVENT_NAME, creator.clone(), seller.clone())
+}
+
+/// Event name for set_launch_penalty.
+pub const LAUNCH_PENALTY_SET_EVENT_NAME: Symbol = symbol_short!("lnch_set");
+
+/// Stable set launch penalty event payload for downstream indexers.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct LaunchPenaltySetEvent {
+    /// Address of the creator.
+    pub creator_id: Address,
+    /// New penalty basis points.
+    pub penalty_bps: u32,
+    /// Ledger sequence at the time of the update.
+    pub ledger: u32,
+}
+
+/// Shared set launch penalty event topics tuple.
+pub fn launch_penalty_set_topics(creator: &Address) -> (Symbol, Address) {
+    (LAUNCH_PENALTY_SET_EVENT_NAME, creator.clone())
+}

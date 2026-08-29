@@ -494,6 +494,14 @@ pub mod constants {
             DataKey::StakingRewardsPool(creator.clone())
         }
 
+        pub fn created_at_ledger(creator: &Address) -> DataKey {
+            DataKey::CreatedAtLedger(creator.clone())
+        }
+
+        pub fn launch_penalty_bps(creator: &Address) -> DataKey {
+            DataKey::LaunchPenaltyBps(creator.clone())
+        }
+
         pub fn next_stake_id(creator: &Address, holder: &Address) -> StakingKey {
             StakingKey::NextStakeId(creator.clone(), holder.clone())
         }
@@ -846,6 +854,15 @@ pub const STAKE_LOCK_LEDGERS: u32 = 518_400;
 /// rewards pool (10%), on top of the existing treasury/recipient split.
 pub const STAKING_REWARD_SHARE_BPS: u32 = 1_000;
 
+/// Launch penalty window in ledgers (~7 days at 5s per ledger).
+pub const LAUNCH_PENALTY_WINDOW_LEDGERS: u32 = 120_960;
+
+/// Default launch penalty basis points (5%).
+pub const DEFAULT_LAUNCH_PENALTY_BPS: u32 = 500;
+
+/// Maximum launch penalty basis points (20%).
+pub const MAX_LAUNCH_PENALTY_BPS: u32 = 2_000;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[contracttype]
 pub enum CurvePreset {
@@ -949,6 +966,10 @@ pub enum DataKey {
     /// Per-creator staking rewards pool and cross-holder staked-key total,
     /// funded by a share of protocol trade fees.
     StakingRewardsPool(Address),
+    /// Ledger sequence when the first key was bought for a creator (launch date).
+    CreatedAtLedger(Address),
+    /// Custom launch penalty basis points for a creator (0 = use default).
+    LaunchPenaltyBps(Address),
 }
 
 /// Internal staking account keys that are not part of the public data-key ABI.
@@ -2799,6 +2820,15 @@ impl CreatorKeysContract {
         // Supply and holder_count must always move together with buyer balance writes.
         write_creator_supply(&env, &creator, profile.supply);
 
+        // Record the key creation ledger on the first buy for launch penalty tracking.
+        if profile.supply == 1 {
+            let created_key = constants::storage::created_at_ledger(&creator);
+            env.storage()
+                .persistent()
+                .set(&created_key, &env.ledger().sequence());
+            extend_key_ttl_to_full_window(&env, &created_key);
+        }
+
         let new_balance = current_balance
             .checked_add(1)
             .ok_or(ContractError::Overflow)?;
@@ -3047,7 +3077,54 @@ impl CreatorKeysContract {
         }
         accrue_sell_trade_fees(&env, &creator, price)?;
 
+        // Launch penalty: if the sell occurs within the launch window
+        // (7 days / 120,960 ledgers of the key's creation), deduct a
+        // configurable penalty from the proceeds and credit it to the
+        // staking rewards pool.
         let proceeds = compute_sell_proceeds(&env, price).unwrap_or(0);
+        let mut final_proceeds = proceeds;
+
+        if let Some(created_at) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, u32>(&constants::storage::created_at_ledger(&creator))
+        {
+            let current_ledger = env.ledger().sequence();
+            if current_ledger
+                .checked_sub(created_at)
+                .unwrap_or(u32::MAX)
+                < crate::LAUNCH_PENALTY_WINDOW_LEDGERS
+            {
+                let penalty_bps: u32 = env
+                    .storage()
+                    .persistent()
+                    .get::<DataKey, u32>(&constants::storage::launch_penalty_bps(&creator))
+                    .unwrap_or(crate::DEFAULT_LAUNCH_PENALTY_BPS);
+                let capped_bps = penalty_bps.min(crate::MAX_LAUNCH_PENALTY_BPS);
+                if capped_bps > 0 {
+                    let penalty_amount =
+                        crate::fee::apply_percentage_fee(proceeds, capped_bps)
+                            .unwrap_or(0);
+                    if penalty_amount > 0 {
+                        final_proceeds = final_proceeds
+                            .checked_sub(penalty_amount)
+                            .ok_or(ContractError::Overflow)?;
+                        credit_staking_rewards_pool(&env, &creator, penalty_amount)?;
+                        env.events().publish(
+                            events::launch_penalty_applied_topics(&creator, &seller),
+                            events::LaunchPenaltyAppliedEvent {
+                                creator_id: creator.clone(),
+                                seller: seller.clone(),
+                                penalty_bps: capped_bps,
+                                penalty_amount,
+                                ledger: env.ledger().sequence(),
+                            },
+                        );
+                    }
+                }
+            }
+        }
+
         let sell_event_data = events::KeysSoldEvent {
             seller: seller.clone(),
             creator_id: creator.clone(),
@@ -4665,6 +4742,43 @@ impl CreatorKeysContract {
         env.storage()
             .persistent()
             .get(&constants::storage::holder_cap_bps(&creator))
+    }
+
+    /// Sets the launch penalty basis points for a creator's keys.
+    ///
+    /// Only callable by the key creator. `penalty_bps` must be in 0..=2000.
+    /// A value of 0 disables the penalty (default behaviour).
+    pub fn set_launch_penalty(env: Env, creator: Address, penalty_bps: u32) {
+        creator.require_auth();
+        if penalty_bps > crate::MAX_LAUNCH_PENALTY_BPS {
+            panic!("PenaltyTooHigh: penalty_bps must be 0..=2000");
+        }
+        let key = constants::storage::launch_penalty_bps(&creator);
+        env.storage().persistent().set(&key, &penalty_bps);
+        extend_key_ttl_to_full_window(&env, &key);
+        env.events().publish(
+            events::launch_penalty_set_topics(&creator),
+            events::LaunchPenaltySetEvent {
+                creator_id: creator,
+                penalty_bps,
+                ledger: env.ledger().sequence(),
+            },
+        );
+    }
+
+    /// Returns the custom launch penalty basis points for a creator,
+    /// or `None` if the default (500 bps) should be used.
+    pub fn get_launch_penalty_bps(env: Env, creator: Address) -> Option<u32> {
+        env.storage()
+            .persistent()
+            .get(&constants::storage::launch_penalty_bps(&creator))
+    }
+
+    /// Returns the ledger sequence at which the first key was bought.
+    pub fn get_created_at_ledger(env: Env, creator: Address) -> Option<u32> {
+        env.storage()
+            .persistent()
+            .get(&constants::storage::created_at_ledger(&creator))
     }
 
     /// Configures the sell lockup duration enforced on every sell.
