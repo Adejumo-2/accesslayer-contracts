@@ -1127,3 +1127,193 @@ pub struct RoyaltyUpdatedEvent {
 pub fn royalty_updated_topics(creator: &Address) -> (Symbol, Address) {
     (ROYALTY_UPDATED_EVENT_NAME, creator.clone())
 }
+
+/// Event name for the protocol trade fee collected on a buy or sell.
+pub const FEE_COLLECTED_EVENT_NAME: Symbol = symbol_short!("fee_coll");
+
+/// Event name for a sell rejected by the anti-flash-trade lockup window.
+pub const LOCKUP_BLOCKED_EVENT_NAME: Symbol = symbol_short!("lck_blk");
+
+/// Stable fee collection event payload for downstream indexers.
+///
+/// Event shape:
+/// - topics: `(FEE_COLLECTED_EVENT_NAME, treasury)`
+/// - data: `FeeCollectedEvent`
+///
+/// Emitted on every buy and sell once the protocol trade fee is configured,
+/// carrying the deducted amount and the treasury address that received it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct FeeCollectedEvent {
+    /// Treasury address that received the fee.
+    pub treasury: Address,
+    /// Fee amount deducted from the trade.
+    pub amount: i128,
+    /// Ledger sequence number at the time of the trade.
+    pub ledger: u32,
+}
+
+/// Shared fee collected event topics tuple.
+pub fn fee_collected_topics(treasury: &Address) -> (Symbol, Address) {
+    (FEE_COLLECTED_EVENT_NAME, treasury.clone())
+}
+
+/// Stable lockup-blocked event payload for downstream indexers.
+///
+/// Event shape:
+/// - topics: `(LOCKUP_BLOCKED_EVENT_NAME, creator_id, seller)`
+/// - data: `LockupBlockedEvent`
+///
+/// Emitted when a sell is rejected because the seller's most recent buy for
+/// this creator falls inside the configured lockup window.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct LockupBlockedEvent {
+    /// Creator whose keys the seller attempted to sell.
+    pub creator_id: Address,
+    /// Seller whose sale was rejected.
+    pub seller: Address,
+    /// Ledger timestamp of the seller's most recent buy.
+    pub last_buy_timestamp: u64,
+    /// Timestamp at which the lockup expires (exclusive).
+    pub unlock_at: u64,
+    /// Ledger timestamp at rejection.
+    pub current_timestamp: u64,
+}
+
+/// Shared lockup blocked event topics tuple.
+pub fn lockup_blocked_topics(creator: &Address, seller: &Address) -> (Symbol, Address, Address) {
+    (LOCKUP_BLOCKED_EVENT_NAME, creator.clone(), seller.clone())
+}
+
+/// Event name for a new staking position created via `stake_keys_locked`.
+pub const STAKE_EVENT_NAME: Symbol = symbol_short!("stake");
+
+/// Event name for a lock period extension via `stake_extend`.
+pub const STAKE_EXTENDED_EVENT_NAME: Symbol = symbol_short!("stk_ext");
+
+/// Event name for an early (pre-maturity) unstake via `early_unstake`.
+pub const EARLY_UNSTAKE_EVENT_NAME: Symbol = symbol_short!("stk_chl");
+
+/// Event name for a reward claim at/after maturity via `claim_stake_reward`.
+pub const STAKE_REWARD_CLAIMED_EVENT_NAME: Symbol = symbol_short!("stk_clm");
+
+/// Stable stake event payload for downstream indexers.
+///
+/// Event shape:
+/// - topics: `(STAKE_EVENT_NAME, creator_id, holder, stake_id)`
+/// - data: `StakeEvent`
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct StakeEvent {
+    /// Creator whose keys are staked.
+    pub creator_id: Address,
+    /// Staker that locked the keys.
+    pub holder: Address,
+    /// Sequential position id for the `(creator, holder)` pair.
+    pub stake_id: u32,
+    /// Number of keys locked.
+    pub amount: u32,
+    /// Ledger sequence at which the position matures.
+    pub unlock_ledger: u32,
+}
+
+/// Shared stake event topics tuple.
+pub fn stake_topics(creator: &Address, holder: &Address, stake_id: u32) -> (Symbol, Address, Address, u32) {
+    (STAKE_EVENT_NAME, creator.clone(), holder.clone(), stake_id)
+}
+
+/// Stable stake-extend event payload for downstream indexers.
+///
+/// Event shape:
+/// - topics: `(STAKE_EXTENDED_EVENT_NAME, creator_id, holder, stake_id)`
+/// - data: `StakeExtendedEvent`
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct StakeExtendedEvent {
+    /// Creator whose keys are staked.
+    pub creator_id: Address,
+    /// Staker that locked the keys.
+    pub holder: Address,
+    /// Extended position id.
+    pub stake_id: u32,
+    /// New maturity ledger sequence after the extension.
+    pub unlock_ledger: u32,
+    /// Additional ledgers appended to the lock period.
+    pub additional_ledgers: u32,
+}
+
+/// Shared stake-extend event topics tuple.
+pub fn stake_extended_topics(
+    creator: &Address,
+    holder: &Address,
+    stake_id: u32,
+) -> (Symbol, Address, Address, u32) {
+    (STAKE_EXTENDED_EVENT_NAME, creator.clone(), holder.clone(), stake_id)
+}
+
+/// Stable early-unstake event payload for downstream indexers.
+///
+/// Event shape:
+/// - topics: `(EARLY_UNSTAKE_EVENT_NAME, creator_id, holder, stake_id)`
+/// - data: `EarlyUnstakeEvent`
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct EarlyUnstakeEvent {
+    /// Creator whose keys were staked.
+    pub creator_id: Address,
+    /// Staker that closed the position.
+    pub holder: Address,
+    /// Closed position id.
+    pub stake_id: u32,
+    /// Keys released back to the holder's liquid balance.
+    pub amount: u32,
+    /// Pro-rata reward entitlement removed from the pool.
+    pub forgone_reward: i128,
+    /// Penalty retained in the pool.
+    pub penalty: i128,
+    /// Ledger sequence at which the position was closed.
+    pub ledger: u32,
+}
+
+/// Shared early-unstake event topics tuple.
+pub fn early_unstake_topics(
+    creator: &Address,
+    holder: &Address,
+    stake_id: u32,
+) -> (Symbol, Address, Address, u32) {
+    (EARLY_UNSTAKE_EVENT_NAME, creator.clone(), holder.clone(), stake_id)
+}
+
+/// Stable stake-reward-claim event payload for downstream indexers.
+///
+/// Event shape:
+/// - topics: `(STAKE_REWARD_CLAIMED_EVENT_NAME, creator_id, holder, stake_id)`
+/// - data: `StakeRewardClaimedEvent`
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct StakeRewardClaimedEvent {
+    /// Creator whose keys were staked.
+    pub creator_id: Address,
+    /// Staker that closed the position.
+    pub holder: Address,
+    /// Closed position id.
+    pub stake_id: u32,
+    /// Keys released back to the holder's liquid balance.
+    pub amount: u32,
+    /// Reward paid out from the pool.
+    pub reward: i128,
+    /// Ledger sequence at which the position matured.
+    pub unlock_ledger: u32,
+    /// Ledger sequence at which the reward was claimed.
+    pub ledger: u32,
+}
+
+/// Shared stake-reward-claim event topics tuple.
+pub fn stake_reward_claimed_topics(
+    creator: &Address,
+    holder: &Address,
+    stake_id: u32,
+) -> (Symbol, Address, Address, u32) {
+    (STAKE_REWARD_CLAIMED_EVENT_NAME, creator.clone(), holder.clone(), stake_id)
+}
