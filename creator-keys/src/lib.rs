@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(clippy::enum_variant_names)] // `contracttype` macro-generated enums share prefixes by design
 pub mod quote_view_errors;
 
 use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, String, Vec};
@@ -4839,11 +4840,7 @@ impl CreatorKeysContract {
     ///
     /// Only callable by the creator. Panics with `CapAlreadySet` if a cap is
     /// already set and the new cap is lower than the current supply.
-    pub fn set_supply_cap(
-        env: Env,
-        creator: Address,
-        cap: u32,
-    ) -> Result<(), ContractError> {
+    pub fn set_supply_cap(env: Env, creator: Address, cap: u32) -> Result<(), ContractError> {
         creator.require_auth();
 
         let profile = read_registered_creator_profile(&env, &creator)?;
@@ -4918,11 +4915,7 @@ impl CreatorKeysContract {
     ///
     /// Callable by any admin in the multisig list. If this is the first
     /// proposal, it records the proposer and awaits a second approval.
-    pub fn propose_pause(
-        env: Env,
-        creator: Address,
-        caller: Address,
-    ) -> Result<(), ContractError> {
+    pub fn propose_pause(env: Env, creator: Address, caller: Address) -> Result<(), ContractError> {
         caller.require_auth();
 
         let config: MultisigAdmins = env
@@ -4969,11 +4962,7 @@ impl CreatorKeysContract {
     ///
     /// Callable by a second admin. When the approval threshold (2 of 3) is
     /// reached, the pause executes automatically and all proposals are reset.
-    pub fn approve_pause(
-        env: Env,
-        creator: Address,
-        caller: Address,
-    ) -> Result<(), ContractError> {
+    pub fn approve_pause(env: Env, creator: Address, caller: Address) -> Result<(), ContractError> {
         caller.require_auth();
 
         let config: MultisigAdmins = env
@@ -5245,9 +5234,7 @@ impl CreatorKeysContract {
             return Err(ContractError::VestingNotStarted);
         }
 
-        let elapsed = current_ledger
-            .checked_sub(schedule.start_ledger)
-            .unwrap_or(0);
+        let elapsed = current_ledger.saturating_sub(schedule.start_ledger);
 
         let vested_keys = if elapsed >= schedule.vesting_period_ledgers {
             schedule.total_keys
@@ -5494,7 +5481,10 @@ impl CreatorKeysContract {
     ) -> Option<VestingSchedule> {
         env.storage()
             .persistent()
-            .get(&constants::storage::vesting_schedule(&creator, &beneficiary))
+            .get(&constants::storage::vesting_schedule(
+                &creator,
+                &beneficiary,
+            ))
     }
 
     // =========================================================================
@@ -5519,11 +5509,7 @@ impl CreatorKeysContract {
         const TIMELOCK_DELAY_LEDGERS: u32 = 34_560;
 
         let next_id_key = DataKey::TimelockNextId;
-        let proposal_id: u32 = env
-            .storage()
-            .persistent()
-            .get(&next_id_key)
-            .unwrap_or(1u32);
+        let proposal_id: u32 = env.storage().persistent().get(&next_id_key).unwrap_or(1u32);
 
         let current_ledger = env.ledger().sequence();
         let execution_not_before = current_ledger
@@ -5641,10 +5627,7 @@ impl CreatorKeysContract {
     }
 
     /// Read-only view: returns a timelock proposal by ID.
-    pub fn get_timelock_proposal(
-        env: Env,
-        proposal_id: u32,
-    ) -> Option<TimelockProposal> {
+    pub fn get_timelock_proposal(env: Env, proposal_id: u32) -> Option<TimelockProposal> {
         env.storage()
             .persistent()
             .get(&DataKey::TimelockProposal(proposal_id))
