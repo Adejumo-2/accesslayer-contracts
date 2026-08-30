@@ -3296,7 +3296,7 @@ impl CreatorKeysContract {
             seller: seller.clone(),
             creator_id: creator.clone(),
             quantity: 1,
-            proceeds: final_proceeds,
+            proceeds,
             new_supply: profile.supply,
             ledger: env.ledger().sequence(),
         };
@@ -4261,7 +4261,6 @@ impl CreatorKeysContract {
         let key = constants::storage::snapshot_meta(&creator, snapshot_id);
         env.storage().persistent().get(&key)
     }
-
     /// Read-only view: returns the optional immutable co-creator config.
     ///
     /// Returns `None` when the creator was registered without a co-creator split.
