@@ -1288,7 +1288,6 @@ pub struct LockupBlockedEvent {
 pub fn lockup_blocked_topics(creator: &Address, seller: &Address) -> (Symbol, Address, Address) {
     (LOCKUP_BLOCKED_EVENT_NAME, creator.clone(), seller.clone())
 }
-
 /// Event name for a new staking position created via `stake_keys_locked`.
 pub const STAKE_EVENT_NAME: Symbol = symbol_short!("stake");
 
@@ -1553,7 +1552,6 @@ pub struct AuctionPurchaseEvent {
 pub fn auction_purchase_topics(creator: &Address, buyer: &Address) -> (Symbol, Address, Address) {
     (AUCTION_PURCHASE_EVENT_NAME, creator.clone(), buyer.clone())
 }
-
 // ============================================================================
 // Co-creator removal (#791)
 // ============================================================================

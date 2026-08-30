@@ -5823,7 +5823,6 @@ impl CreatorKeysContract {
     }
 
 
-
     /// Unstakes a specified amount of keys for a holder.
     ///
     /// Unstaked keys become liquid and can be sold. The holder must authorize the call.
