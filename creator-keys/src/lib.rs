@@ -3256,7 +3256,6 @@ impl CreatorKeysContract {
         // configurable penalty from the proceeds and credit it to the
         // staking rewards pool.
         let proceeds = compute_sell_proceeds(&env, price).unwrap_or(0);
-        let mut final_proceeds = proceeds;
 
         if let Some(created_at) = env
             .storage()
@@ -3277,9 +3276,6 @@ impl CreatorKeysContract {
                     let penalty_amount =
                         crate::fee::apply_percentage_fee(proceeds, capped_bps).unwrap_or(0);
                     if penalty_amount > 0 {
-                        final_proceeds = final_proceeds
-                            .checked_sub(penalty_amount)
-                            .ok_or(ContractError::Overflow)?;
                         credit_staking_rewards_pool(&env, &creator, penalty_amount)?;
                         env.events().publish(
                             events::launch_penalty_applied_topics(&creator, &seller),
