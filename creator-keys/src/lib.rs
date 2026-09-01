@@ -1550,6 +1550,15 @@ fn credit_creator_fee_recipient_balance(
     Ok(())
 }
 
+/// Credits `amount` to the creator fee balance for `creator`.
+fn credit_creator_fee_balance(
+    env: &Env,
+    creator: &Address,
+    amount: i128,
+) -> Result<(), ContractError> {
+    credit_creator_fee_recipient_balance(env, creator, amount)
+}
+
 fn read_co_creator_config(env: &Env, creator: &Address) -> Option<CoCreatorConfig> {
     let key = constants::storage::co_creator(creator);
     env.storage()
@@ -3254,7 +3263,7 @@ impl CreatorKeysContract {
         // Launch penalty: if the sell occurs within the launch window
         // (7 days / 120,960 ledgers of the key's creation), deduct a
         // configurable penalty from the proceeds and credit it to the
-        // staking rewards pool.
+        // creator fee balance.
         let proceeds = compute_sell_proceeds(&env, price).unwrap_or(0);
 
         if let Some(created_at) = env
@@ -3276,7 +3285,7 @@ impl CreatorKeysContract {
                     let penalty_amount =
                         crate::fee::apply_percentage_fee(proceeds, capped_bps).unwrap_or(0);
                     if penalty_amount > 0 {
-                        credit_staking_rewards_pool(&env, &creator, penalty_amount)?;
+                        credit_creator_fee_balance(&env, &creator, penalty_amount)?;
                         env.events().publish(
                             events::launch_penalty_applied_topics(&creator, &seller),
                             events::LaunchPenaltyAppliedEvent {
