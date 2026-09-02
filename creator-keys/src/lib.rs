@@ -544,6 +544,7 @@ pub mod constants {
             DataKey::ReferralFeeBps
         }
 
+
         pub fn royalty_config(creator: &Address) -> DataKey {
             DataKey::RoyaltyConfig(creator.clone())
         }
@@ -887,9 +888,6 @@ pub const MAX_BATCH_BUY_SIZE: usize = 5;
 /// Maximum royalty fee basis points (5%).
 pub const MAX_ROYALTY_BPS: u32 = 500;
 
-/// Maximum number of keys a pre-launch auction can allocate at the fixed
-/// auction price before the bonding curve takes over.
-pub const MAX_AUCTION_SUPPLY: u32 = 10_000;
 
 /// Lock duration for staked keys before a reward claim is permitted (30 days
 /// at 5s per ledger).
@@ -914,6 +912,10 @@ pub const MAX_LAUNCH_PENALTY_BPS: u32 = 2_000;
 /// [`CreatorKeysContract::set_buy_cooldown`]. A cooldown of 0 means no
 /// restriction (the default when no cooldown has been configured).
 pub const MAX_BUY_COOLDOWN_LEDGERS: u32 = 720;
+
+/// Maximum number of keys a pre-launch auction can allocate at the fixed
+/// auction price before the bonding curve takes over.
+pub const MAX_AUCTION_SUPPLY: u32 = 10_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[contracttype]
@@ -4270,12 +4272,22 @@ impl CreatorKeysContract {
         let key = constants::storage::snapshot_meta(&creator, snapshot_id);
         env.storage().persistent().get(&key)
     }
+
     /// Read-only view: returns the optional immutable co-creator config.
     ///
     /// Returns `None` when the creator was registered without a co-creator split.
     pub fn get_co_creator(env: Env, creator: Address) -> Option<CoCreatorConfig> {
         read_co_creator_config(&env, &creator)
     }
+
+    /// Configures a fixed-price pre-launch auction phase for `creator`'s keys.
+    ///
+    /// Callable only by the creator before any keys have been sold (`supply == 0`).
+    /// While active, the first `auction_supply` keys are sold at `auction_price`
+    /// regardless of the bonding curve formula. Once `auction_supply` keys have
+    /// been purchased, subsequent buys transition smoothly to the bonding curve.
+    ///
+
 
     /// Designates (or updates) the creator's co-creator revenue split (issue #782).
     ///
@@ -8989,3 +9001,6 @@ mod test_issues;
 
 #[cfg(test)]
 mod test_issues_778_779_781_782;
+
+#[cfg(test)]
+mod test_staking_lifecycle;
