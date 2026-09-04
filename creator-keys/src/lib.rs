@@ -888,7 +888,6 @@ pub const MAX_BATCH_BUY_SIZE: usize = 5;
 /// Maximum royalty fee basis points (5%).
 pub const MAX_ROYALTY_BPS: u32 = 500;
 
-
 /// Lock duration for staked keys before a reward claim is permitted (30 days
 /// at 5s per ledger).
 pub const STAKE_LOCK_LEDGERS: u32 = 518_400;
@@ -4279,14 +4278,6 @@ impl CreatorKeysContract {
     pub fn get_co_creator(env: Env, creator: Address) -> Option<CoCreatorConfig> {
         read_co_creator_config(&env, &creator)
     }
-
-    /// Configures a fixed-price pre-launch auction phase for `creator`'s keys.
-    ///
-    /// Callable only by the creator before any keys have been sold (`supply == 0`).
-    /// While active, the first `auction_supply` keys are sold at `auction_price`
-    /// regardless of the bonding curve formula. Once `auction_supply` keys have
-    /// been purchased, subsequent buys transition smoothly to the bonding curve.
-    ///
 
 
     /// Designates (or updates) the creator's co-creator revenue split (issue #782).
