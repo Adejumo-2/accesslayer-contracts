@@ -8,6 +8,7 @@ use contract_test_env::{
 };
 use soroban_sdk::testutils::{Address as _, Ledger as _};
 
+
 #[test]
 fn test_buy_quote_idempotent_three_calls_at_supply_zero() {
     let env = test_env_with_auths();
@@ -63,9 +64,8 @@ fn test_buy_quote_idempotent_buy_between_calls_at_same_supply() {
     let buyer_b = soroban_sdk::Address::generate(&env);
     let quote_for_sell_back = client.get_buy_quote(&creator);
     client.buy_key(&creator, &buyer_b, &quote_for_sell_back.total_amount, &None);
-    let mut l = env.ledger().get();
-    l.sequence_number += 1;
-    env.ledger().set(l);
+    env.ledger().with_mut(|l| l.sequence_number += 1);
+
     client.sell_key(&creator, &buyer_b, &None);
 
     let q_after = client.get_buy_quote(&creator);
