@@ -7,7 +7,6 @@ use contract_test_env::{
 };
 use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, Address};
 
-
 #[test]
 fn test_buy_holder_count_behavior() {
     let env = test_env_with_auths();

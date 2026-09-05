@@ -8,7 +8,6 @@ use contract_test_env::{
 };
 use soroban_sdk::testutils::{Address as _, Ledger as _};
 
-
 #[test]
 fn test_buy_quote_idempotent_three_calls_at_supply_zero() {
     let env = test_env_with_auths();

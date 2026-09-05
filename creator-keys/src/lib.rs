@@ -544,7 +544,6 @@ pub mod constants {
             DataKey::ReferralFeeBps
         }
 
-
         pub fn royalty_config(creator: &Address) -> DataKey {
             DataKey::RoyaltyConfig(creator.clone())
         }
@@ -4279,7 +4278,6 @@ impl CreatorKeysContract {
         read_co_creator_config(&env, &creator)
     }
 
-
     /// Designates (or updates) the creator's co-creator revenue split (issue #782).
     ///
     /// Unlike the immutable split optionally set at [`Self::register_creator`], this
@@ -5828,7 +5826,6 @@ impl CreatorKeysContract {
 
         Ok(())
     }
-
 
     /// Unstakes a specified amount of keys for a holder.
     ///

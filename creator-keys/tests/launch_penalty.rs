@@ -11,7 +11,6 @@ use contract_test_env::{
 };
 use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, Address, Env};
 
-
 const KEY_PRICE: i128 = 100;
 
 /// Setup a client, register a creator, and configure pricing.
