@@ -122,9 +122,6 @@ pub enum StakingError {
     NotRegistered = 7,
     /// The contract is paused.
     ProtocolPaused = 8,
-    GlobalTradingHalted = 51,
-    FrozenBalanceExceeded = 52,
-    FreezeQuantityExceedsBalance = 53,
 }
 
 /// Errors raised by co-creator and auction lifecycle entrypoints.
@@ -491,12 +488,24 @@ pub mod constants {
             DataKey::StakingRewardsPool(creator.clone())
         }
 
+        pub fn total_staked(creator: &Address) -> DataKey {
+            DataKey::TotalStaked(creator.clone())
+        }
+
+        pub fn stake_unlock_ledger(creator: &Address, holder: &Address) -> DataKey {
+            DataKey::StakeUnlockLedger(creator.clone(), holder.clone())
+        }
+
         pub fn created_at_ledger(creator: &Address) -> DataKey {
             DataKey::CreatedAtLedger(creator.clone())
         }
 
         pub fn launch_penalty_bps(creator: &Address) -> DataKey {
             DataKey::LaunchPenaltyBps(creator.clone())
+        }
+
+        pub fn auction_config(creator: &Address) -> DataKey {
+            DataKey::AuctionConfig(creator.clone())
         }
 
         pub fn next_stake_id(creator: &Address, holder: &Address) -> StakingKey {
@@ -592,18 +601,6 @@ pub mod constants {
 
         pub fn buy_cooldown(creator: &Address) -> DataKey {
             DataKey::BuyCooldown(creator.clone())
-        }
-
-        pub fn total_staked(creator: &Address) -> DataKey {
-            DataKey::TotalStaked(creator.clone())
-        }
-
-        pub fn stake_unlock_ledger(creator: &Address, holder: &Address) -> DataKey {
-            DataKey::StakeUnlockLedger(creator.clone(), holder.clone())
-        }
-
-        pub fn auction_config(creator: &Address) -> DataKey {
-            DataKey::AuctionConfig(creator.clone())
         }
 
         /// Storage key for a creator's deprecation marker; value is `buyback_price_per_key` (i128).
@@ -774,6 +771,9 @@ pub const KEY_DECIMALS: u32 = 7;
 /// buy or sell operation to prevent active creator state from expiring.
 pub const CREATOR_TTL_LEDGERS: u32 = 6311520; // ~2 years at 5s per ledger
 
+/// Maximum staking lock extension from the current ledger (~180 days at 5 seconds per ledger).
+pub const MAX_STAKE_LOCK_LEDGERS: u32 = 3_110_400;
+
 /// Minimum remaining TTL (in ledgers) that triggers a TTL extension event.
 ///
 /// When the creator key's remaining TTL drops strictly below this threshold,
@@ -887,10 +887,6 @@ pub const MAX_BATCH_BUY_SIZE: usize = 5;
 /// Maximum royalty fee basis points (5%).
 pub const MAX_ROYALTY_BPS: u32 = 500;
 
-/// Maximum number of keys a pre-launch auction can allocate at the fixed
-/// auction price before the bonding curve takes over.
-pub const MAX_AUCTION_SUPPLY: u32 = 10_000;
-
 /// Lock duration for staked keys before a reward claim is permitted (30 days
 /// at 5s per ledger).
 pub const STAKE_LOCK_LEDGERS: u32 = 518_400;
@@ -914,6 +910,10 @@ pub const MAX_LAUNCH_PENALTY_BPS: u32 = 2_000;
 /// [`CreatorKeysContract::set_buy_cooldown`]. A cooldown of 0 means no
 /// restriction (the default when no cooldown has been configured).
 pub const MAX_BUY_COOLDOWN_LEDGERS: u32 = 720;
+
+/// Maximum number of keys a pre-launch auction can allocate at the fixed
+/// auction price before the bonding curve takes over.
+pub const MAX_AUCTION_SUPPLY: u32 = 10_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[contracttype]
@@ -1018,7 +1018,6 @@ pub enum DataKey {
     LastBuyTimestamp(Address, Address),
     /// Lockup duration in seconds for sell lockup enforcement.
     LockupDurationSecs,
-    /// Per-creator quorum basis points for governance proposals.
     QuorumBps(Address),
     /// Per-creator holder cap in basis points (max % of supply one wallet may hold).
     HolderCapBps(Address),
@@ -1062,6 +1061,26 @@ pub struct ReinvestResult {
     pub remainder_returned: i128,
 }
 
+/// Internal staking account keys that are not part of the public data-key ABI.
+///
+/// Used to keep [`DataKey`] within Soroban's 50-variant `#[contracttype]` cap;
+/// `NextStakeId` is keyed per `(creator, holder)` pair.
+#[derive(Clone, Debug, PartialEq)]
+#[contracttype]
+pub enum StakingKey {
+    /// Next sequential stake id for a `(creator, holder)` pair -> `u32`.
+    NextStakeId(Address, Address),
+}
+
+/// Configuration for a creator's fixed-price pre-launch auction phase.
+#[derive(Clone, Debug, PartialEq)]
+#[contracttype]
+pub struct AuctionConfig {
+    pub auction_price: i128,
+    pub auction_supply: u32,
+    pub auction_sold: u32,
+}
+
 /// Time-locked key allocation for creator self-vesting.
 ///
 /// When a creator registers, they may optionally lock a portion of keys
@@ -1072,16 +1091,6 @@ pub struct LockedAllocation {
     pub amount: u32,
     pub unlock_ledger: u32,
     pub claimed: bool,
-}
-
-/// Internal staking account keys that are not part of the public data-key ABI.
-///
-/// Used to keep [`DataKey`] within the `#[contracttype]` export limit.
-#[derive(Clone, Debug, PartialEq)]
-#[contracttype]
-pub enum StakingKey {
-    /// Next sequential stake id for a `(creator, holder)` pair -> `u32`.
-    NextStakeId(Address, Address),
 }
 
 /// A single locked staking position held by a holder.
@@ -1130,15 +1139,6 @@ pub struct StakeRewardClaim {
     pub amount: u32,
     /// Reward paid out to the staker from the pool.
     pub reward: i128,
-}
-
-/// Pre-launch fixed-price auction configuration for a creator key.
-#[derive(Clone, Debug, PartialEq)]
-#[contracttype]
-pub struct AuctionConfig {
-    pub auction_price: i128,
-    pub auction_supply: u32,
-    pub auction_sold: u32,
 }
 
 /// Optional immutable collaborator split configured at creator registration.
@@ -1548,6 +1548,15 @@ fn credit_creator_fee_recipient_balance(
     env.storage().persistent().set(&key, &updated);
     extend_key_ttl_to_full_window(env, &key);
     Ok(())
+}
+
+/// Credits `amount` to the creator fee balance for `creator`.
+fn credit_creator_fee_balance(
+    env: &Env,
+    creator: &Address,
+    amount: i128,
+) -> Result<(), ContractError> {
+    credit_creator_fee_recipient_balance(env, creator, amount)
 }
 
 fn read_co_creator_config(env: &Env, creator: &Address) -> Option<CoCreatorConfig> {
@@ -2827,7 +2836,6 @@ impl CreatorKeysContract {
                 .persistent()
                 .get(&constants::storage::CIRCUIT_BREAKER_THRESHOLD)
                 .unwrap_or(30);
-
             if pre_price > 0 && post_price > pre_price {
                 let price_change = (post_price - pre_price) as u128;
                 let pre_price_u128 = pre_price as u128;
@@ -3255,9 +3263,8 @@ impl CreatorKeysContract {
         // Launch penalty: if the sell occurs within the launch window
         // (7 days / 120,960 ledgers of the key's creation), deduct a
         // configurable penalty from the proceeds and credit it to the
-        // staking rewards pool.
+        // creator fee balance.
         let proceeds = compute_sell_proceeds(&env, price).unwrap_or(0);
-        let mut final_proceeds = proceeds;
 
         if let Some(created_at) = env
             .storage()
@@ -3278,10 +3285,7 @@ impl CreatorKeysContract {
                     let penalty_amount =
                         crate::fee::apply_percentage_fee(proceeds, capped_bps).unwrap_or(0);
                     if penalty_amount > 0 {
-                        final_proceeds = final_proceeds
-                            .checked_sub(penalty_amount)
-                            .ok_or(ContractError::Overflow)?;
-                        credit_staking_rewards_pool(&env, &creator, penalty_amount)?;
+                        credit_creator_fee_balance(&env, &creator, penalty_amount)?;
                         env.events().publish(
                             events::launch_penalty_applied_topics(&creator, &seller),
                             events::LaunchPenaltyAppliedEvent {
@@ -3301,7 +3305,7 @@ impl CreatorKeysContract {
             seller: seller.clone(),
             creator_id: creator.clone(),
             quantity: 1,
-            proceeds: final_proceeds,
+            proceeds,
             new_supply: profile.supply,
             ledger: env.ledger().sequence(),
         };
@@ -8985,3 +8989,6 @@ mod test_issues;
 
 #[cfg(test)]
 mod test_issues_778_779_781_782;
+
+#[cfg(test)]
+mod test_staking_lifecycle;
