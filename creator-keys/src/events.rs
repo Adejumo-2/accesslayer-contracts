@@ -1742,3 +1742,32 @@ pub struct KeysRedeemedEvent {
 pub fn keys_redeemed_topics(creator: &Address, holder: &Address) -> (Symbol, Address, Address) {
     (KEYS_REDEEMED_EVENT_NAME, creator.clone(), holder.clone())
 }
+
+// ============================================================================
+// Early Unstake Penalty
+// ============================================================================
+
+/// Event name for early unstake with forfeited penalty.
+pub const EARLY_UNSTAKE_PENALTY_EVENT_NAME: Symbol = symbol_short!("erl_unst");
+
+/// Stable early unstake event payload.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct EarlyUnstakePenaltyEvent {
+    pub wallet: Address,
+    pub key_id: Address,
+    pub returned_quantity: u32,
+    pub penalty_quantity: u32,
+}
+
+/// Shared early unstake event topics tuple.
+pub fn early_unstake_penalty_topics(
+    key_id: &Address,
+    wallet: &Address,
+) -> (Symbol, Address, Address) {
+    (
+        EARLY_UNSTAKE_PENALTY_EVENT_NAME,
+        key_id.clone(),
+        wallet.clone(),
+    )
+}
