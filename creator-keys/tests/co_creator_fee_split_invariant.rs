@@ -9,7 +9,10 @@ use contract_test_env::{
     compute_expected_creator_fee, register_creator_keys, set_pricing_and_fees, test_env_with_auths,
 };
 use creator_keys::{CoCreatorConfig, RegisterCreatorParams};
-use soroban_sdk::{testutils::Address as _, Address, Env, String};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    Address, Env, String,
+};
 
 const KEY_PRICE: i128 = 1000;
 const CREATOR_BPS: u32 = 9000;
@@ -185,6 +188,8 @@ fn test_co_creator_fee_split_invariant_on_sell() {
     let co_creator_balance_before = client.get_co_creator_fee_balance(&creator, &co_creator);
 
     // Execute sell
+    // Advance the ledger so the sell is not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
     let sell_quote = client.get_sell_quote(&creator, &trader);
     client.sell_key(&creator, &trader, &None);
 

@@ -11,7 +11,10 @@ use contract_test_env::{
     register_creator_keys, register_test_creator, set_pricing_and_fees, test_env_with_auths,
 };
 use creator_keys::CreatorKeysContractClient;
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    Address, Env,
+};
 
 /// Cost implied by the same fee math used when the contract executes the trade path.
 fn actual_buyback_cost(client: &CreatorKeysContractClient<'_>, price: i128) -> i128 {
@@ -75,6 +78,8 @@ fn setup_holder_with_supply(
     for _ in 0..key_count {
         client.buy_key(creator, &holder, &buy_quote.total_amount, &None);
     }
+    // Advance the ledger so the later sell is not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
     holder
 }
 

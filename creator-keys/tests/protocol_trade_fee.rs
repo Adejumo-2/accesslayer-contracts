@@ -14,7 +14,7 @@ use contract_test_env::{
 };
 use creator_keys::events::{self, FEE_COLLECTED_EVENT_NAME};
 use soroban_sdk::{
-    testutils::{Address as _, Events},
+    testutils::{Address as _, Events, Ledger as _},
     Address, Env, IntoVal, Symbol, Vec,
 };
 
@@ -101,6 +101,8 @@ fn test_sell_routes_one_percent_to_treasury_and_remainder_to_seller() {
     s.client.buy_key(&s.creator, &trader, &KEY_PRICE, &None);
     assert_eq!(s.client.get_treasury_balance(), 1);
 
+    // Advance the ledger so the sell is not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
     s.client.sell_key(&s.creator, &trader, &None);
 
     // Capture events immediately after the sell — any subsequent contract
@@ -111,14 +113,9 @@ fn test_sell_routes_one_percent_to_treasury_and_remainder_to_seller() {
     // seller proceeds = net - creator_fee = 99 - 99 = 0.
     let fees = collected_fees(&env);
 
-    assert_eq!(
-        s.client.get_treasury_balance(),
-        2,
-        "the sell must add another 1% of the 100 stroop price"
-    );
-
     // The sell event's proceeds must reflect the net amount after the fee:
     // 100 gross - 1 treasury fee = 99 (no further split fees configured).
+    // Capture it before the view call below flushes the test-env event buffer.
     let mut sell_events = Vec::new(&env);
     for event in env.events().all().iter() {
         let (_, ref topics, _) = event;
@@ -131,6 +128,13 @@ fn test_sell_routes_one_percent_to_treasury_and_remainder_to_seller() {
         }
     }
     assert_eq!(sell_events.len(), 1, "exactly one sell event expected");
+
+    assert_eq!(
+        s.client.get_treasury_balance(),
+        2,
+        "the sell must add another 1% of the 100 stroop price"
+    );
+
     let (_, _, data) = sell_events.get(0).unwrap();
     let payload: events::KeysSoldEvent = data.into_val(&env);
     // With CREATOR_BPS=10_000 the full net goes to the creator, so the

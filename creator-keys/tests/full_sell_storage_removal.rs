@@ -12,7 +12,10 @@ use contract_test_env::{
     assert_storage_absent, register_creator_keys, register_test_creator, set_key_price_for_tests,
 };
 use creator_keys::constants;
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    Address, Env,
+};
 
 const KEY_PRICE: i128 = 250;
 const HOLDER_KEYS: u32 = 3;
@@ -29,6 +32,8 @@ fn setup_holder_with_full_balance(
         client.buy_key(&creator, &holder, &KEY_PRICE, &None);
     }
     assert_eq!(client.get_key_balance(&creator, &holder), HOLDER_KEYS);
+    // Advance the ledger so later sells are not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
 
     (creator, holder)
 }

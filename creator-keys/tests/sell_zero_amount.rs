@@ -17,7 +17,7 @@ use contract_test_env::{
 };
 use creator_keys::{events, ContractError};
 use soroban_sdk::{
-    testutils::{Address as _, Events},
+    testutils::{Address as _, Events, Ledger as _},
     Address, IntoVal, Symbol,
 };
 
@@ -116,6 +116,8 @@ fn test_sell_zero_keys_after_full_exit_reverts_and_emits_no_event() {
     assert_eq!(client.get_key_balance(&creator, &trader), 1);
     assert_eq!(client.get_total_key_supply(&creator), 1);
 
+    // Advance the ledger so the sell is not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
     client.sell_key(&creator, &trader, &None);
     assert_eq!(client.get_key_balance(&creator, &trader), 0);
     assert_eq!(client.get_total_key_supply(&creator), 0);
@@ -172,6 +174,8 @@ fn test_sell_zero_liquid_keys_when_all_staked_reverts_and_emits_no_event() {
     client.buy_key(&creator, &holder, &100_i128, &None);
     client.stake_keys(&creator, &holder, &2);
 
+    // Advance the ledger so the sell attempt is not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
     assert_eq!(client.get_key_balance(&creator, &holder), 2);
     assert_eq!(client.get_staked_balance(&creator, &holder), 2);
     assert_eq!(client.get_liquid_balance(&creator, &holder), 0);

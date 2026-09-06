@@ -14,7 +14,7 @@ use contract_test_env::{
 use creator_keys::events::{self, LOCKUP_BLOCKED_EVENT_NAME};
 use creator_keys::ContractError;
 use soroban_sdk::{
-    testutils::{Address as _, Events},
+    testutils::{Address as _, Events, Ledger},
     Address, Env, IntoVal, Symbol,
 };
 
@@ -26,6 +26,14 @@ struct Setup<'a> {
     client: creator_keys::CreatorKeysContractClient<'a>,
     admin: Address,
     creator: Address,
+}
+
+/// Advance the ledger sequence so sells are not blocked by the flash-loan
+/// guard (same-ledger buy-to-sell), while the timestamp is left untouched.
+/// The lockup window is timestamp-based, so the guard and the lockup can be
+/// exercised independently.
+fn advance_ledger(env: &Env) {
+    env.ledger().with_mut(|l| l.sequence_number += 1);
 }
 
 fn setup_with_lockup(env: &Env) -> Setup<'_> {
@@ -63,13 +71,13 @@ fn test_sell_within_lockup_is_rejected_and_emits_event() {
     let trader = Address::generate(&env);
     s.client.buy_key(&s.creator, &trader, &KEY_PRICE, &None);
 
-    // Selling in the same ledger/timestamp as the buy is blocked.
+    // Leave the ledger (sell is not a same-ledger flash trade) but keep the
+    // timestamp inside the lockup window so the lockup rejects the sale.
+    advance_ledger(&env);
     let result = s.client.try_sell_key(&s.creator, &trader, &None);
     assert_eq!(
         result,
-        Err(Err(soroban_sdk::InvokeError::Contract(
-            ContractError::LockupPeriodActive as u32
-        ))),
+        Err(Ok(ContractError::LockupPeriodActive)),
         "a sell inside the 24h lockup must be rejected"
     );
 
@@ -106,8 +114,10 @@ fn test_sell_after_lockup_succeeds() {
     let trader = Address::generate(&env);
     s.client.buy_key(&s.creator, &trader, &KEY_PRICE, &None);
 
-    // Advance past the lockup window; expiry is inclusive.
+    // Advance past the lockup window; expiry is inclusive. The ledger bump
+    // keeps the sell clear of the same-ledger flash-loan guard.
     set_test_timestamp(&env, BASE_TIMESTAMP + LOCKUP_SECS);
+    advance_ledger(&env);
     let supply = s.client.sell_key(&s.creator, &trader, &None);
     assert_eq!(supply, 0);
     assert_eq!(s.client.get_key_balance(&s.creator, &trader), 0);
@@ -131,14 +141,9 @@ fn test_last_buy_timestamp_is_updated_on_every_buy() {
     // Past the first buy's window but still inside the second buy's window:
     // the sell must stay blocked because last_buy_timestamp was refreshed.
     set_test_timestamp(&env, second_buy_ts + LOCKUP_SECS - 1);
+    advance_ledger(&env);
     let result = s.client.try_sell_key(&s.creator, &trader, &None);
-    assert_eq!(
-        result,
-        Err(Err(soroban_sdk::InvokeError::Contract(
-            ContractError::LockupPeriodActive as u32
-        )))
-    );
-    assert_eq!(result, Err(Ok(ContractError::AllocationLocked)));
+    assert_eq!(result, Err(Ok(ContractError::LockupPeriodActive)));
 
     // Once the refreshed window has elapsed the sell goes through.
     set_test_timestamp(&env, second_buy_ts + LOCKUP_SECS);
@@ -165,6 +170,7 @@ fn test_admin_can_update_the_lockup_duration() {
     s.client.buy_key(&s.creator, &trader, &KEY_PRICE, &None);
 
     set_test_timestamp(&env, BASE_TIMESTAMP + 3_600);
+    advance_ledger(&env);
     s.client.sell_key(&s.creator, &trader, &None);
     assert_eq!(client_supply(&s), 0);
 }
@@ -176,12 +182,6 @@ fn test_non_admin_cannot_configure_the_lockup() {
 
     let impostor = Address::generate(&env);
     let result = s.client.try_set_lockup_duration(&impostor, &LOCKUP_SECS);
-    assert_eq!(
-        result,
-        Err(Err(soroban_sdk::InvokeError::Contract(
-            ContractError::Unauthorized as u32
-        )))
-    );
     assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
 }
 
@@ -191,12 +191,6 @@ fn test_zero_duration_is_rejected() {
     let s = setup_with_lockup(&env);
 
     let result = s.client.try_set_lockup_duration(&s.admin, &0);
-    assert_eq!(
-        result,
-        Err(Err(soroban_sdk::InvokeError::Contract(
-            ContractError::NotPositiveAmount as u32
-        )))
-    );
     assert_eq!(result, Err(Ok(ContractError::NotPositiveAmount)));
 }
 
@@ -211,9 +205,11 @@ fn test_lockup_is_inactive_until_configured() {
     // The default duration is reported for visibility...
     assert_eq!(client.get_lockup_duration(), 86_400);
 
-    // ...but no sell is ever time-gated until the admin opts in.
+    // ...but no sell is ever time-gated until the admin opts in. Sell on a
+    // later ledger so the same-ledger flash-loan guard does not interfere.
     let trader = Address::generate(&env);
     client.buy_key(&creator, &trader, &KEY_PRICE, &None);
+    advance_ledger(&env);
     client.sell_key(&creator, &trader, &None);
     assert_eq!(client.get_total_key_supply(&creator), 0);
     assert!(lockup_blocked_events(&env).is_empty());

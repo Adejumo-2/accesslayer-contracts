@@ -10,7 +10,10 @@ use contract_test_env::{
     register_creator_keys, register_test_creator, set_pricing_and_fees, test_env_with_auths,
 };
 use creator_keys::ContractError;
-use soroban_sdk::{testutils::Address as _, Address};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    Address,
+};
 
 const KEY_PRICE: i128 = 1_000;
 const CREATOR_BPS: u32 = 9_000;
@@ -131,6 +134,8 @@ fn test_sell_succeeds_immediately_after_unpause() {
     assert!(!client.get_is_paused());
 
     // Sell must succeed in the very next call after unpause
+    // Advance the ledger so the sell is not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
     let new_supply = client.sell_key(&creator, &buyer, &None);
     assert_eq!(
         new_supply, 1,
@@ -182,6 +187,8 @@ fn test_post_unpause_state_matches_baseline() {
     );
 
     // Post-unpause sell: supply retreats by 1
+    // Advance the ledger so the sell is not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
     client.sell_key(&creator, &buyer, &None);
     assert_eq!(
         client.get_total_key_supply(&creator),

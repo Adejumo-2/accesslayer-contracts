@@ -16,7 +16,7 @@ use contract_test_env::{
 };
 use creator_keys::{events, ContractError, CreatorKeysContractClient};
 use soroban_sdk::{
-    testutils::{Address as _, Events},
+    testutils::{Address as _, Events, Ledger as _},
     Address, Env, IntoVal, Symbol,
 };
 
@@ -107,6 +107,8 @@ fn test_sell_event_reports_seller_and_new_supply_after_selling_three_of_ten() {
 
     // Sell the first two keys, then clear the log so only the third sell's
     // event is under assertion.
+    // Advance the ledger so the sells are not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
     client.sell_key(&creator, &seller, &None);
     client.sell_key(&creator, &seller, &None);
     env.events().all();
@@ -146,6 +148,8 @@ fn test_sell_event_new_supply_tracks_every_sell_down_to_zero() {
     buy_keys(&client, &creator, &seller, STARTING_SUPPLY);
 
     // Each successive sell must report the supply that sell produced.
+    // Advance the ledger so the sells are not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
     for expected_supply in (0..STARTING_SUPPLY).rev() {
         env.events().all();
         client.sell_key(&creator, &seller, &None);
@@ -170,6 +174,8 @@ fn test_sell_event_names_the_selling_wallet_not_another_holder() {
     buy_keys(&client, &creator, &other_holder, 5);
 
     env.events().all();
+    // Advance the ledger so the sell is not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
     client.sell_key(&creator, &seller, &None);
 
     let event = expect_one_sell_event(&env);
@@ -229,6 +235,8 @@ fn test_no_sell_event_emitted_when_the_sell_misses_its_slippage_floor() {
     env.events().all();
 
     // Demand more than the sale can possibly return.
+    // Advance the ledger so the sell attempt is not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
     assert_eq!(
         client.try_sell_key(&creator, &holder, &Some(i128::MAX)),
         Err(Ok(ContractError::SlippageExceeded))

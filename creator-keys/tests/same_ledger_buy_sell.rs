@@ -1,10 +1,9 @@
-//! Integration test for a buy and an immediate sell in the same ledger (issue #699).
+//! Integration test for a buy followed by a sell of the same keys (issue #699).
 //!
-//! A buy followed by a sell in the same ledger must produce a net-zero change:
-//! the final supply and holder count must equal their pre-buy values.
-//! The sell must observe the supply *after* the buy, not the pre-buy value,
-//! confirming that operations within the same ledger apply sequentially without
-//! state corruption.
+//! A buy followed by a sell must produce a net-zero change: the final supply
+//! and holder count must equal their pre-buy values. The sell must observe the
+//! supply *after* the buy, not the pre-buy value, confirming that operations
+//! apply sequentially without state corruption.
 //!
 //! # Acceptance criteria covered
 //!
@@ -14,13 +13,15 @@
 //! - `sell_key` return value reflects supply after the sell (i.e. back to pre-buy)
 //! - No state corruption: post-sell supply and balance are internally consistent
 //!
-//! # Why same ledger
+//! # Why the sell happens on a later ledger
 //!
-//! The Soroban test harness advances a single ledger per `invoke` call unless
-//! `env.ledger().set(...)` is used to bump the sequence. Tests here do NOT bump
-//! the ledger between the buy and the sell, so both operations share the same
-//! `env.ledger().sequence()`.  This exercises the same-ledger sequential
-//! ordering guarantee: the sell sees post-buy state, not pre-buy state.
+//! The contract's flash-loan guard (issue #781) rejects a sell in the same
+//! ledger as the seller's most recent buy, closing the risk-free buy-then-sell
+//! vector within a single transaction. These tests therefore bump the ledger
+//! sequence by one between the buys and the sells. The sell still executes in
+//! the very next ledger, so it observes post-buy state exactly as in the
+//! original same-ledger scenario — the sequential-ordering guarantee the tests
+//! exercise is unchanged.
 //!
 //! # Test strategy
 //!
@@ -35,8 +36,8 @@ use contract_test_env::{
 };
 use creator_keys::events;
 use soroban_sdk::{
-    testutils::{Address as _, Events},
-    Address, IntoVal, Symbol,
+    testutils::{Address as _, Events, Ledger as _},
+    Address, Env, IntoVal, Symbol,
 };
 
 const KEY_PRICE: i128 = 1_000_000;
@@ -68,6 +69,14 @@ fn sell_n_keys(
     }
 }
 
+/// Advance the ledger sequence by one so a sell is not rejected by the
+/// same-ledger flash-loan guard (issue #781). The sell still executes in the
+/// next ledger after the buys, so it observes post-buy state exactly as in a
+/// same-ledger scenario.
+fn advance_ledger(env: &Env) {
+    env.ledger().with_mut(|l| l.sequence_number += 1);
+}
+
 // ── Supply invariants ─────────────────────────────────────────────────────────
 
 /// Final supply after buying and selling the same number of keys equals the
@@ -84,8 +93,10 @@ fn test_final_supply_equals_pre_buy_supply_after_net_zero_buy_sell() {
     let supply_before = client.get_total_key_supply(&creator);
     assert_eq!(supply_before, 0, "precondition: creator starts at supply 0");
 
-    // Buy 5 keys then sell 5 keys — same ledger, no sequence bump between them.
+    // Buy 5 keys, then sell them all on the next ledger (the flash-loan guard
+    // rejects a same-ledger sell of a position bought in that ledger).
     buy_n_keys(&client, &creator, &trader, 5);
+    advance_ledger(&env);
     sell_n_keys(&client, &creator, &trader, 5);
 
     let supply_after = client.get_total_key_supply(&creator);
@@ -123,7 +134,8 @@ fn test_supply_transitions_correctly_through_buy_and_sell() {
         "supply must be 5 after 5 buys"
     );
 
-    // Track supply after each sell (same ledger — no sequence bump)
+    // Track supply after each sell (next ledger — past the flash-loan guard)
+    advance_ledger(&env);
     for expected in (0u32..5).rev() {
         let new_supply = client.sell_key(&creator, &trader, &None);
         assert_eq!(
@@ -165,6 +177,8 @@ fn test_holder_count_returns_to_pre_buy_value_after_full_exit() {
         "holder count must be 1 while trader holds 5 keys"
     );
 
+    // Sell on the next ledger so the flash-loan guard does not reject the sells.
+    advance_ledger(&env);
     sell_n_keys(&client, &creator, &trader, 5);
     let holder_count_after = client.get_creator_holder_count(&creator);
 
@@ -192,7 +206,9 @@ fn test_holder_count_unchanged_after_partial_sell() {
     buy_n_keys(&client, &creator, &trader, 5);
     assert_eq!(client.get_creator_holder_count(&creator), 1);
 
-    // Partial sell: 3 out of 5 — trader still holds 2
+    // Partial sell: 3 out of 5 — trader still holds 2. Sell on the next
+    // ledger so the flash-loan guard does not reject the sells.
+    advance_ledger(&env);
     sell_n_keys(&client, &creator, &trader, 3);
 
     assert_eq!(
@@ -265,6 +281,8 @@ fn test_trader_balance_is_zero_after_full_exit() {
         "precondition: trader holds 5 keys"
     );
 
+    // Sell on the next ledger so the flash-loan guard does not reject the sells.
+    advance_ledger(&env);
     sell_n_keys(&client, &creator, &trader, 5);
 
     assert_eq!(
@@ -290,6 +308,8 @@ fn test_supply_equals_sum_of_holder_balances_after_net_zero_trade() {
     buy_n_keys(&client, &creator, &bystander, 3);
 
     buy_n_keys(&client, &creator, &trader, 5);
+    // Sell on the next ledger so the flash-loan guard does not reject the sells.
+    advance_ledger(&env);
     sell_n_keys(&client, &creator, &trader, 5);
 
     let supply = client.get_total_key_supply(&creator);
@@ -336,7 +356,8 @@ fn test_buy_and_sell_return_values_form_consistent_supply_sequence() {
         buy_returns.push(new_supply);
     }
 
-    // Sell 5 keys; collect each return value
+    // Sell 5 keys on the next ledger; collect each return value
+    advance_ledger(&env);
     let mut sell_returns = Vec::new();
     for _ in 0..5 {
         let new_supply = client.sell_key(&creator, &trader, &None);
@@ -409,7 +430,8 @@ fn test_buy_and_sell_events_both_emitted_and_correctly_tagged() {
             .count();
     }
 
-    // Count sell events — one per invocation
+    // Count sell events — one per invocation (next ledger, past the flash-loan guard)
+    advance_ledger(&env);
     let mut sell_count = 0usize;
     for _ in 0..5 {
         client.sell_key(&creator, &trader, &None);
@@ -492,6 +514,8 @@ fn test_sell_events_carry_correct_addresses() {
 
     buy_n_keys(&client, &creator, &trader, 5);
 
+    // Sell on the next ledger so the flash-loan guard does not reject the sells.
+    advance_ledger(&env);
     for _ in 0..5 {
         client.sell_key(&creator, &trader, &None);
 
@@ -550,8 +574,9 @@ fn test_bystander_unaffected_by_same_ledger_buy_sell() {
     let bystander_balance_before = client.get_key_balance(&creator, &bystander);
     let supply_after_bystander = client.get_total_key_supply(&creator);
 
-    // Trader's same-ledger buy+sell
+    // Trader's buy+sell (sell on the next ledger, past the flash-loan guard)
     buy_n_keys(&client, &creator, &trader, 5);
+    advance_ledger(&env);
     sell_n_keys(&client, &creator, &trader, 5);
 
     // Bystander must see no change

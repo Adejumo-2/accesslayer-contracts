@@ -189,7 +189,9 @@ fn test_global_resume_with_two_approvals_lifts_halt() {
     let events = env.events().all();
     assert!(!f.client.get_global_trading_paused());
 
-    assert!(env.events().all().iter().any(|(_, topics, _)| {
+    // Check the captured log: a view call above resets the harness's visible
+    // event buffer, so a fresh `env.events().all()` here would be empty.
+    assert!(events.iter().any(|(_, topics, _)| {
         topics.get(0).map(|topic| {
             let name: soroban_sdk::Symbol = topic.into_val(&env);
             name == GLOBAL_PAUSE_LIFTED_EVENT_NAME

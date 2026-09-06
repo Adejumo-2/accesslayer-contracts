@@ -7,7 +7,10 @@ use contract_test_env::{
     test_env_with_auths,
 };
 use creator_keys::ContractError;
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    Address, Env,
+};
 
 const KEY_PRICE: i128 = 1_000;
 
@@ -37,6 +40,8 @@ fn setup_sell(
     let (client, contract_id, creator, holder) = setup_buy(env);
     let buy_quote = client.get_buy_quote(&creator);
     client.buy_key(&creator, &holder, &buy_quote.total_amount, &None);
+    // Advance the ledger so later sells are not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
     (client, contract_id, creator, holder)
 }
 
@@ -105,6 +110,8 @@ fn test_sell_slippage_succeeds_when_proceeds_meet_or_exceed_min_proceeds() {
     let holder_two = Address::generate(&env);
     let buy_quote = client.get_buy_quote(&creator);
     client.buy_key(&creator, &holder_two, &buy_quote.total_amount, &None);
+    // Advance the ledger so the sell is not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
     let sell_quote_two = client.get_sell_quote(&creator, &holder_two);
 
     let supply_below_limit = client.sell_key(
@@ -124,6 +131,8 @@ fn test_slippage_none_passthrough_preserves_existing_behavior() {
     let supply = client.buy_key(&creator, &buyer, &buy_quote.total_amount, &None);
     assert_eq!(supply, 1);
 
+    // Advance the ledger so the sell is not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
     let sell_quote = client.get_sell_quote(&creator, &buyer);
     let supply_after_sell = client.sell_key(&creator, &buyer, &None);
     assert_eq!(supply_after_sell, 0);

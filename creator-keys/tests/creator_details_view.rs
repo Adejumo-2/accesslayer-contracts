@@ -3,7 +3,10 @@
 mod contract_test_env;
 
 use creator_keys::{CreatorKeysContract, CreatorKeysContractClient};
-use soroban_sdk::{testutils::Address as _, Env, String};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    Env, String,
+};
 
 #[test]
 fn test_get_creator_details_unregistered_returns_defaults() {
@@ -103,6 +106,8 @@ fn test_get_creator_details_reflects_latest_state_after_buy_then_sell() {
     assert_eq!(details_after_buy.handle, String::from_str(&env, "bob"));
 
     // State mutation 2: sell the key back — supply must decrement
+    // Advance the ledger so the sell is not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
     client.sell_key(&creator, &buyer, &None);
 
     let details_after_sell = client.get_creator_details(&creator);

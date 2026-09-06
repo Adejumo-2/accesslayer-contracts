@@ -169,6 +169,8 @@ fn test_sell_event_new_supply_matches_post_transaction_state() {
     assert_eq!(client.get_total_key_supply(&creator), 2);
 
     // --- First sell: 2 -> 1 ---
+    // Advance the ledger so the sells are not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
     let supply_after_first = client.sell_key(&creator, &holder, &None);
     assert_eq!(supply_after_first, 1, "return value must be new supply (1)");
     assert_eq!(
@@ -302,6 +304,9 @@ fn test_sell_event_proceeds_matches_sell_quote() {
 
     // Clear events
     env.events().all();
+
+    // Advance the ledger so the sell is not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
 
     // Sell and extract the event
     client.sell_key(&creator, &holder, &None);

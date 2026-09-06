@@ -7,7 +7,10 @@ use contract_test_env::{
     test_env_with_auths, DEFAULT_TEST_TIMESTAMP,
 };
 use creator_keys::{ContractError, CreatorKeysContractClient};
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    Address, Env,
+};
 
 fn setup(env: &Env) -> (CreatorKeysContractClient<'_>, Address) {
     let (client, _) = register_creator_keys(env);
@@ -25,6 +28,8 @@ fn test_sell_key_decrements_supply_and_balance() {
     client.buy_key(&creator, &seller, &100_i128, &None);
     client.buy_key(&creator, &seller, &100_i128, &None);
 
+    // Advance the ledger so the sell is not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
     let new_supply = client.sell_key(&creator, &seller, &None);
 
     assert_eq!(new_supply, 1);
@@ -41,6 +46,8 @@ fn test_sell_key_removes_holder_when_last_key_is_sold() {
     client.buy_key(&creator, &seller, &100_i128, &None);
     assert_eq!(client.get_creator_holder_count(&creator), 1);
 
+    // Advance the ledger so the sell is not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
     let new_supply = client.sell_key(&creator, &seller, &None);
 
     assert_eq!(new_supply, 0);
@@ -59,6 +66,8 @@ fn test_sell_key_preserves_holder_count_when_seller_still_has_keys() {
     client.buy_key(&creator, &seller, &100_i128, &None);
     assert_eq!(client.get_creator_holder_count(&creator), 1);
 
+    // Advance the ledger so the sell is not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
     let new_supply = client.sell_key(&creator, &seller, &None);
 
     assert_eq!(new_supply, 1);
@@ -100,6 +109,8 @@ fn test_sell_reverts_when_seller_has_insufficient_balance() {
     assert_eq!(client.get_total_key_supply(&creator), 1);
 
     // Seller sells their only key — this succeeds.
+    // Advance the ledger so the sell is not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
     client.sell_key(&creator, &seller, &None);
     assert_eq!(client.get_key_balance(&creator, &seller), 0);
     assert_eq!(client.get_total_key_supply(&creator), 0);
@@ -129,6 +140,8 @@ fn test_sell_full_exit_then_rebuy_updates_state() {
     assert_eq!(client.get_key_balance(&creator, &trader), 1);
     assert_eq!(client.get_creator_holder_count(&creator), 1);
 
+    // Advance the ledger so the sell is not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
     client.sell_key(&creator, &trader, &None);
     assert_eq!(client.get_total_key_supply(&creator), 0);
     assert_eq!(client.get_key_balance(&creator, &trader), 0);
@@ -152,6 +165,8 @@ fn test_holder_count_returns_to_zero_after_last_holder_exit_and_rebuy() {
     client.buy_key(&creator, &trader, &100_i128, &None);
     assert_eq!(client.get_creator_holder_count(&creator), 1);
 
+    // Advance the ledger so the sell is not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
     client.sell_key(&creator, &trader, &None);
     assert_eq!(client.get_creator_holder_count(&creator), 0);
 
@@ -174,6 +189,8 @@ fn test_multi_key_full_exit_decrements_holder_count_only_on_last_sell() {
     assert_eq!(client.get_key_balance(&creator, &seller), 3);
 
     // Sell 2 keys — holder count stays unchanged.
+    // Advance the ledger so the sells are not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
     client.sell_key(&creator, &seller, &None);
     assert_eq!(client.get_creator_holder_count(&creator), 1);
     assert_eq!(client.get_key_balance(&creator, &seller), 2);

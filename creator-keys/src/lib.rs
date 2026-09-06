@@ -1878,11 +1878,34 @@ fn credit_staking_rewards_pool(
     creator: &Address,
     trade_fee: i128,
 ) -> Result<(), ContractError> {
+    // Only the configured share of each protocol trade fee is routed into the
+    // staking rewards pool; the rest goes to the treasury/recipient.
     let share = fee::apply_percentage_fee(trade_fee, crate::staking::REWARDS_SHARE_BPS)
         .ok_or(ContractError::Overflow)?;
     if share == 0 {
         return Ok(());
     }
+    add_to_staking_pool(env, creator, share)
+}
+
+/// Credits the full `amount` to the creator's staking rewards pool.
+///
+/// Used for penalties (e.g. the launch penalty) that are meant to fund the
+/// staking rewards pool in full, bypassing the 10% share applied to protocol
+/// trade fees by [`credit_staking_rewards_pool`].
+fn credit_staking_rewards_pool_full(
+    env: &Env,
+    creator: &Address,
+    amount: i128,
+) -> Result<(), ContractError> {
+    if amount <= 0 {
+        return Ok(());
+    }
+    add_to_staking_pool(env, creator, amount)
+}
+
+/// Adds `amount` to the creator's staking rewards pool balance.
+fn add_to_staking_pool(env: &Env, creator: &Address, amount: i128) -> Result<(), ContractError> {
     let pool_key = constants::storage::staking_rewards_pool(creator);
     let mut state: StakingRewardsState =
         env.storage()
@@ -1894,7 +1917,7 @@ fn credit_staking_rewards_pool(
             });
     state.pool = state
         .pool
-        .checked_add(share)
+        .checked_add(amount)
         .ok_or(ContractError::Overflow)?;
     env.storage().persistent().set(&pool_key, &state);
     extend_key_ttl_to_full_window(env, &pool_key);
@@ -2447,6 +2470,16 @@ fn extend_creator_ttl(env: &Env, creator: &Address) {
             .extend_ttl(&curve_preset_key, threshold, extend_to);
     }
 
+    // `created_at_ledger` is written once (on the first buy) but read on every
+    // sell for the launch-penalty window check, so it must stay alive for as
+    // long as the creator profile does.
+    let created_at_key = constants::storage::created_at_ledger(creator);
+    if env.storage().persistent().has(&created_at_key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&created_at_key, threshold, extend_to);
+    }
+
     let co_creator_key = constants::storage::co_creator(creator);
     if env.storage().persistent().has(&co_creator_key) {
         env.storage()
@@ -2823,7 +2856,7 @@ impl CreatorKeysContract {
                 let max_allowed = ((i128::from(post_buy_supply) * i128::from(cap_bps))
                     / i128::from(fee::BPS_MAX)) as u32;
                 if post_buy_balance > max_allowed {
-                    return Err(ContractError::WalletCapExceeded);
+                    return Err(ContractError::MaxHoldingExceeded);
                 }
             }
         }
@@ -3076,7 +3109,7 @@ impl CreatorKeysContract {
                             current_timestamp: now,
                         },
                     );
-                    return Err(ContractError::AllocationLocked);
+                    return Err(ContractError::LockupPeriodActive);
                 }
             }
         }
@@ -3126,9 +3159,27 @@ impl CreatorKeysContract {
             env.storage()
                 .persistent()
                 .remove(&constants::storage::last_buy_timestamp(&creator, &seller));
+            // A full exit clears the position entirely; the flash-loan guard
+            // record is meaningless once no balance remains, and the next buy
+            // re-creates it from the current ledger.
+            env.storage()
+                .persistent()
+                .remove(&constants::storage::last_buy_ledger(&creator, &seller));
         } else {
             env.storage().persistent().set(&balance_key, &new_balance);
             extend_key_ttl_to_full_window(&env, &balance_key);
+            // The balance now outlives the original buy, so keep the
+            // flash-loan guard and lockup-timestamp entries alive for as long
+            // as the position remains open; otherwise a later sell reads an
+            // archived key after a long horizon of partial sells.
+            extend_key_ttl_to_full_window(
+                &env,
+                &constants::storage::last_buy_ledger(&creator, &seller),
+            );
+            extend_key_ttl_to_full_window(
+                &env,
+                &constants::storage::last_buy_timestamp(&creator, &seller),
+            );
         }
         accrue_sell_trade_fees(&env, &creator, price)?;
 
@@ -3161,7 +3212,10 @@ impl CreatorKeysContract {
                         final_proceeds = final_proceeds
                             .checked_sub(penalty_amount)
                             .ok_or(ContractError::Overflow)?;
-                        credit_staking_rewards_pool(&env, &creator, penalty_amount)?;
+                        // The penalty funds the staking rewards pool in full
+                        // (unlike protocol trade fees, only a 10% share of
+                        // which is routed there).
+                        credit_staking_rewards_pool_full(&env, &creator, penalty_amount)?;
                         env.events().publish(
                             events::launch_penalty_applied_topics(&creator, &seller),
                             events::LaunchPenaltyAppliedEvent {
@@ -4028,15 +4082,28 @@ impl CreatorKeysContract {
         caller: Address,
     ) -> Result<(), FeatureError> {
         caller.require_auth();
-        read_registered_creator_profile(&env, &creator).map_err(|_| FeatureError::NotRegistered)?;
-
-        let key = constants::storage::co_creator(&creator);
-        let existing: Option<CoCreatorConfig> = env.storage().persistent().get(&key);
-        if existing.is_none() {
-            return Err(FeatureError::NoCoCreatorSet);
+        if caller != creator {
+            return Err(FeatureError::Unauthorized);
         }
 
+        let key = constants::storage::co_creator(&creator);
+        let config: CoCreatorConfig = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(FeatureError::NoCoCreatorSet)?;
+
         env.storage().persistent().remove(&key);
+
+        env.events().publish(
+            events::co_creator_removed_topics(&creator),
+            events::CoCreatorRemovedEvent {
+                creator_id: creator,
+                co_creator: config.address,
+                ledger: env.ledger().sequence(),
+            },
+        );
+
         Ok(())
     }
 
@@ -5030,7 +5097,7 @@ impl CreatorKeysContract {
         creator.require_auth();
         let resolved_bps = cap_bps.unwrap_or(DEFAULT_HOLDER_CAP_BPS);
         if !(HOLDER_CAP_MIN_BPS..=HOLDER_CAP_MAX_BPS).contains(&resolved_bps) {
-            return Err(ContractError::WalletCapExceeded);
+            return Err(ContractError::InvalidHolderCap);
         }
         let key = constants::storage::holder_cap_bps(&creator);
         env.storage().persistent().set(&key, &resolved_bps);
@@ -7000,22 +7067,16 @@ impl CreatorKeysContract {
             return Err(FeatureError::Unauthorized);
         }
 
-        read_registered_creator_profile(&env, &creator).map_err(|_| FeatureError::NotRegistered)?;
-
+        let profile = read_registered_creator_profile(&env, &creator)
+            .map_err(|_| FeatureError::NotRegistered)?;
+        if profile.supply > 0 {
+            return Err(FeatureError::AuctionAlreadyStarted);
+        }
         if auction_price <= 0 {
             return Err(FeatureError::NotPositiveAmount);
         }
-
         if auction_supply == 0 || auction_supply > MAX_AUCTION_SUPPLY {
             return Err(FeatureError::InvalidAuctionConfig);
-        }
-
-        let key = constants::storage::auction_config(&creator);
-        let existing: Option<AuctionConfig> = env.storage().persistent().get(&key);
-        if let Some(ref config) = existing {
-            if config.auction_sold > 0 {
-                return Err(FeatureError::AuctionAlreadyStarted);
-            }
         }
 
         let config = AuctionConfig {
@@ -7023,7 +7084,9 @@ impl CreatorKeysContract {
             auction_supply,
             auction_sold: 0,
         };
+        let key = constants::storage::auction_config(&creator);
         env.storage().persistent().set(&key, &config);
+        extend_key_ttl_to_full_window(&env, &key);
 
         env.events().publish(
             events::auction_configured_topics(&creator),

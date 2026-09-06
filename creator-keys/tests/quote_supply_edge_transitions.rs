@@ -6,7 +6,10 @@ use contract_test_env::{
     compute_expected_buy_price, register_creator_keys, register_test_creator, set_pricing_and_fees,
     test_env_with_auths,
 };
-use soroban_sdk::{testutils::Address as _, Address};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    Address,
+};
 
 #[test]
 fn test_buy_quote_deterministic_across_zero_supply_transition() {
@@ -25,6 +28,8 @@ fn test_buy_quote_deterministic_across_zero_supply_transition() {
     client.buy_key(&creator, &buyer, &q_before.total_amount, &None);
 
     // Transition back to zero supply.
+    // Advance the ledger so the sell is not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
     client.sell_key(&creator, &buyer, &None);
     assert_eq!(client.get_total_key_supply(&creator), 0);
 
@@ -73,6 +78,8 @@ fn test_buy_quote_recomputed_after_sell_reduces_supply() {
         "pre-sell quote must match bonding curve helper"
     );
 
+    // Advance the ledger so the sell is not blocked by the flash-loan guard.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
     client.sell_key(&creator, &holder, &None);
 
     let supply_after_sell = client.get_total_key_supply(&creator);
