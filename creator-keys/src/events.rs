@@ -1743,22 +1743,31 @@ pub fn keys_redeemed_topics(creator: &Address, holder: &Address) -> (Symbol, Add
     (KEYS_REDEEMED_EVENT_NAME, creator.clone(), holder.clone())
 }
 
-/// Event name for a satisfied slippage check on buy or sell.
-pub const SLIPPAGE_CHECK_PASSED_EVENT_NAME: Symbol = symbol_short!("slp_ok");
+// ============================================================================
+// Early Unstake Penalty
+// ============================================================================
 
-/// Emitted when a buy or sell with a non-None slippage bound passes the
-/// price/proceeds check, giving downstream indexers visibility into slippage
-/// guard behavior.
+/// Event name for early unstake with forfeited penalty.
+pub const EARLY_UNSTAKE_PENALTY_EVENT_NAME: Symbol = symbol_short!("erl_unst");
+
+/// Stable early unstake event payload.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
-pub struct SlippageCheckPassedEvent {
-    pub creator_id: Address,
-    pub actual_amount: i128,
-    pub bound: i128,
-    pub ledger: u32,
+pub struct EarlyUnstakePenaltyEvent {
+    pub wallet: Address,
+    pub key_id: Address,
+    pub returned_quantity: u32,
+    pub penalty_quantity: u32,
 }
 
-/// Shared slippage-check-passed event topics tuple.
-pub fn slippage_check_passed_topics(creator: &Address) -> (Symbol, Address) {
-    (SLIPPAGE_CHECK_PASSED_EVENT_NAME, creator.clone())
+/// Shared early unstake event topics tuple.
+pub fn early_unstake_penalty_topics(
+    key_id: &Address,
+    wallet: &Address,
+) -> (Symbol, Address, Address) {
+    (
+        EARLY_UNSTAKE_PENALTY_EVENT_NAME,
+        key_id.clone(),
+        wallet.clone(),
+    )
 }

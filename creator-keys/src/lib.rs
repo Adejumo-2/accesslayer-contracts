@@ -512,6 +512,10 @@ pub mod constants {
             StakingKey::NextStakeId(creator.clone(), holder.clone())
         }
 
+        pub fn early_exit_penalty_bps(key_id: &Address) -> DataKey {
+            DataKey::EarlyExitPenaltyBps(key_id.clone())
+        }
+
         pub fn key_balance(creator: &Address, holder: &Address) -> DataKey {
             key_balance_key(creator, holder)
         }
@@ -1052,6 +1056,8 @@ pub enum DataKey {
     /// Escrow balance held on behalf of a deprecated key's creator.
     /// Funds are paid out to redeeming holders and any remainder is returned on full redemption.
     DeprecationEscrow(Address),
+    /// Configured early exit penalty bps for key.
+    EarlyExitPenaltyBps(Address),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -6105,15 +6111,113 @@ impl CreatorKeysContract {
         Ok(position.unlock_ledger)
     }
 
-    /// Unstakes `stake_id` before its lock period elapses.
+    /// Sets early exit penalty basis points for `key_id` (0 to 5000 bps, i.e. 0%–50%).
     ///
-    /// The position's pro-rata reward entitlement is removed from the pool and
-    /// a fixed penalty (retained for remaining stakers) is deducted, after which
-    /// the keys return to the holder's liquid balance.
+    /// Callable by the key creator. Default is 2000 bps (20%).
+    /// Panics with `PenaltyTooHigh` if `penalty_bps > 5000`.
+    pub fn set_early_exit_penalty(env: Env, key_id: Address, penalty_bps: u32) {
+        key_id.require_auth();
+        if penalty_bps > 5000 {
+            panic!("PenaltyTooHigh: penalty_bps must be 0..=5000");
+        }
+        let storage_key = constants::storage::early_exit_penalty_bps(&key_id);
+        env.storage().persistent().set(&storage_key, &penalty_bps);
+        extend_key_ttl_to_full_window(&env, &storage_key);
+    }
+
+    /// Read-only view: returns the early exit penalty bps configured for `key_id`.
+    /// Defaults to 2000 bps (20%) if unconfigured.
+    pub fn get_early_exit_penalty_bps(env: Env, key_id: Address) -> u32 {
+        let storage_key = constants::storage::early_exit_penalty_bps(&key_id);
+        env.storage().persistent().get(&storage_key).unwrap_or(2000)
+    }
+
+    /// Allows stakers to exit early before their lock expires by forfeiting a penalty.
     ///
-    /// Only callable while the position is still locked; once the position has
-    /// matured use [`CreatorKeysContract::claim_stake_reward`] instead.
-    pub fn early_unstake(
+    /// Callable by any wallet with an active stake for `key_id`.
+    /// Panics with `NoStakeFound` if the wallet has no active stake for `key_id`.
+    pub fn early_unstake(env: Env, key_id: Address, wallet: Address) {
+        let (actual_key_id, actual_wallet) =
+            if Self::get_staked_balance(env.clone(), key_id.clone(), wallet.clone()) > 0 {
+                (key_id.clone(), wallet.clone())
+            } else if Self::get_staked_balance(env.clone(), wallet.clone(), key_id.clone()) > 0 {
+                (wallet.clone(), key_id.clone())
+            } else {
+                (key_id.clone(), wallet.clone())
+            };
+
+        actual_wallet.require_auth();
+        assert_not_paused(&env).unwrap();
+
+        let staked_quantity =
+            Self::get_staked_balance(env.clone(), actual_key_id.clone(), actual_wallet.clone());
+        if staked_quantity == 0 {
+            panic!("NoStakeFound: wallet has no active stake for key_id");
+        }
+
+        let penalty_bps = Self::get_early_exit_penalty_bps(env.clone(), actual_key_id.clone());
+        let penalty_quantity = ((staked_quantity as u64) * (penalty_bps as u64) / 10000) as u32;
+        let returned_quantity = staked_quantity - penalty_quantity;
+
+        // Clear staked balance for wallet
+        let staked_balance_key = constants::storage::staked_balance(&actual_key_id, &actual_wallet);
+        env.storage().persistent().remove(&staked_balance_key);
+        env.storage()
+            .persistent()
+            .remove(&constants::storage::stake_unlock_ledger(
+                &actual_key_id,
+                &actual_wallet,
+            ));
+
+        // Update total staked for key_id
+        let total_staked_key = constants::storage::total_staked(&actual_key_id);
+        let current_total_staked = read_total_staked(&env, &actual_key_id);
+        let new_total_staked = current_total_staked.saturating_sub(staked_quantity);
+        if new_total_staked == 0 {
+            env.storage().persistent().remove(&total_staked_key);
+        } else {
+            env.storage()
+                .persistent()
+                .set(&total_staked_key, &new_total_staked);
+        }
+
+        // Deduct penalty_quantity from holder's total key_balance
+        let balance_key = constants::storage::holder_balance_key(&actual_key_id, &actual_wallet);
+        let current_balance: u32 = env.storage().persistent().get(&balance_key).unwrap_or(0);
+        let new_balance = current_balance.saturating_sub(penalty_quantity);
+        if new_balance == 0 {
+            env.storage().persistent().remove(&balance_key);
+        } else {
+            env.storage().persistent().set(&balance_key, &new_balance);
+        }
+
+        // Add penalty_quantity to staking_rewards pool for key_id
+        let pool_key = constants::storage::staking_rewards_pool(&actual_key_id);
+        let mut state: StakingRewardsState =
+            env.storage()
+                .persistent()
+                .get(&pool_key)
+                .unwrap_or(StakingRewardsState {
+                    pool: 0,
+                    total_staked: 0,
+                });
+        state.pool = state.pool.saturating_add(penalty_quantity as i128);
+        env.storage().persistent().set(&pool_key, &state);
+
+        // Emit early_unstake event
+        env.events().publish(
+            events::early_unstake_penalty_topics(&actual_key_id, &actual_wallet),
+            events::EarlyUnstakePenaltyEvent {
+                wallet: actual_wallet,
+                key_id: actual_key_id,
+                returned_quantity,
+                penalty_quantity,
+            },
+        );
+    }
+
+    /// Unstakes `stake_id` before its lock period elapses for a specific positional stake.
+    pub fn early_unstake_position(
         env: Env,
         creator: Address,
         holder: Address,
