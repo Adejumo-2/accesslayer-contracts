@@ -44,8 +44,9 @@ fn test_sell_event_seller_address_matches_caller() {
 
     // Clear event log and then perform the sell
     env.events().all(); // Clear existing events
-                        // Advance the ledger so the sell is not blocked by the flash-loan guard.
-    env.ledger().with_mut(|l| l.sequence_number += 1);
+    let mut l = env.ledger().get();
+    l.sequence_number += 1;
+    env.ledger().set(l);
     client.sell_key(&creator, &seller, &None);
 
     // Extract and verify the sell event
@@ -114,8 +115,9 @@ fn test_sell_event_seller_address_field_is_non_zero() {
         &None,
     );
     client.buy_key(&creator, &seller, &KEY_PRICE, &None);
-    // Advance the ledger so the sell is not blocked by the flash-loan guard.
-    env.ledger().with_mut(|l| l.sequence_number += 1);
+    let mut l = env.ledger().get();
+    l.sequence_number += 1;
+    env.ledger().set(l);
     client.sell_key(&creator, &seller, &None);
 
     // Verify the seller address field is present and non-zero

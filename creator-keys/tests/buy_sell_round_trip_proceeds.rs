@@ -119,9 +119,9 @@ fn test_buy_then_sell_round_trip_returns_correct_xlm_to_seller() {
     let creator_fee_before_sell = client.get_creator_fee_balance(&creator);
     let protocol_fee_before_sell = client.get_protocol_recipient_balance();
 
-    // Advance the ledger so the sell is not blocked by the flash-loan guard.
-    env.ledger().with_mut(|l| l.sequence_number += 1);
-
+    let mut l = env.ledger().get();
+    l.sequence_number += 1;
+    env.ledger().set(l);
     let supply_after_sell = client.sell_key(&creator, &trader, &None);
 
     assert_eq!(

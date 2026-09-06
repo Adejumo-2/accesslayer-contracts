@@ -11,10 +11,7 @@
 mod contract_test_env;
 
 use creator_keys::{ContractError, CreatorKeysContract, CreatorKeysContractClient};
-use soroban_sdk::{
-    testutils::{Address as _, Ledger as _},
-    Env,
-};
+use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, Env};
 
 // ── NotRegistered on a fresh address ─────────────────────────────────────────
 
@@ -66,8 +63,9 @@ fn test_get_creator_succeeds_after_supply_returns_to_zero() {
 
     contract_test_env::set_key_price_for_tests(&env, &client, 100_i128);
     client.buy_key(&creator, &buyer, &100_i128, &None);
-    // Advance the ledger so the sell is not blocked by the flash-loan guard.
-    env.ledger().with_mut(|l| l.sequence_number += 1);
+    let mut l = env.ledger().get();
+    l.sequence_number += 1;
+    env.ledger().set(l);
     client.sell_key(&creator, &buyer, &None);
 
     // The creator profile must still exist even with supply == 0.

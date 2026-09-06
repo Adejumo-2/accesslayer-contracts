@@ -21,10 +21,7 @@ use contract_test_env::{
     register_creator_keys, register_test_creator, set_pricing_and_fees, test_env_with_auths,
 };
 use creator_keys::{ContractError, CreatorKeysContractClient};
-use soroban_sdk::{
-    testutils::{Address as _, Ledger as _},
-    Address, Env,
-};
+use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, Address, Env};
 
 const KEY_PRICE: i128 = 1_000;
 const CREATOR_BPS: u32 = 9_000;
@@ -64,8 +61,9 @@ fn test_selling_one_key_from_supply_five_sets_supply_to_four() {
     buy_keys(&client, &creator, &seller, 5);
     assert_eq!(client.get_total_key_supply(&creator), 5);
 
-    // Advance the ledger so the sell is not blocked by the flash-loan guard.
-    env.ledger().with_mut(|l| l.sequence_number += 1);
+    let mut l = env.ledger().get();
+    l.sequence_number += 1;
+    env.ledger().set(l);
     let returned = client.sell_key(&creator, &seller, &None);
 
     assert_eq!(returned, 4, "sell_key must return the post-sell supply");
@@ -86,9 +84,11 @@ fn test_selling_all_keys_from_supply_ten_sets_supply_to_zero() {
     buy_keys(&client, &creator, &seller, 10);
     assert_eq!(client.get_total_key_supply(&creator), 10);
 
+    let mut l = env.ledger().get();
+    l.sequence_number += 1;
+    env.ledger().set(l);
+
     // Walk the whole position down, checking the view after every sell.
-    // Advance the ledger so the sells are not blocked by the flash-loan guard.
-    env.ledger().with_mut(|l| l.sequence_number += 1);
     for expected_supply in (0..10u32).rev() {
         let returned = client.sell_key(&creator, &seller, &None);
         assert_eq!(returned, expected_supply);
@@ -115,9 +115,11 @@ fn test_supply_tracks_sells_across_two_holders() {
     buy_keys(&client, &creator, &second, 6);
     assert_eq!(client.get_total_key_supply(&creator), 10);
 
+    let mut l = env.ledger().get();
+    l.sequence_number += 1;
+    env.ledger().set(l);
+
     // Supply is the shared total: it drops regardless of which holder sells.
-    // Advance the ledger so the sells are not blocked by the flash-loan guard.
-    env.ledger().with_mut(|l| l.sequence_number += 1);
     assert_eq!(client.sell_key(&creator, &first, &None), 9);
     assert_eq!(client.sell_key(&creator, &second, &None), 8);
     assert_eq!(client.sell_key(&creator, &second, &None), 7);
@@ -138,8 +140,9 @@ fn test_selling_past_zero_supply_is_rejected_and_never_underflows() {
     let seller = Address::generate(&env);
 
     buy_keys(&client, &creator, &seller, 2);
-    // Advance the ledger so the sells are not blocked by the flash-loan guard.
-    env.ledger().with_mut(|l| l.sequence_number += 1);
+    let mut l = env.ledger().get();
+    l.sequence_number += 1;
+    env.ledger().set(l);
     client.sell_key(&creator, &seller, &None);
     client.sell_key(&creator, &seller, &None);
     assert_eq!(client.get_total_key_supply(&creator), 0);
@@ -166,9 +169,11 @@ fn test_selling_more_than_the_wallet_holds_is_rejected_on_balance() {
 
     buy_keys(&client, &creator, &seller, 3);
 
+    let mut l = env.ledger().get();
+    l.sequence_number += 1;
+    env.ledger().set(l);
+
     // Three sells drain the position exactly.
-    // Advance the ledger so the sells are not blocked by the flash-loan guard.
-    env.ledger().with_mut(|l| l.sequence_number += 1);
     for _ in 0..3 {
         client.sell_key(&creator, &seller, &None);
     }
@@ -244,9 +249,11 @@ fn test_supply_unchanged_after_a_sell_rejected_on_slippage() {
     buy_keys(&client, &creator, &seller, 4);
     let supply_before = client.get_total_key_supply(&creator);
 
+    let mut l = env.ledger().get();
+    l.sequence_number += 1;
+    env.ledger().set(l);
+
     // Demand more proceeds than the sale can return.
-    // Advance the ledger so the sell attempt is not blocked by the flash-loan guard.
-    env.ledger().with_mut(|l| l.sequence_number += 1);
     assert_eq!(
         client.try_sell_key(&creator, &seller, &Some(i128::MAX)),
         Err(Ok(ContractError::SlippageExceeded))

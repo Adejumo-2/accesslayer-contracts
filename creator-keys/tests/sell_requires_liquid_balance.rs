@@ -15,10 +15,7 @@ use contract_test_env::{
     register_creator_keys, register_test_creator, set_key_price_for_tests, test_env_with_auths,
 };
 use creator_keys::{ContractError, CreatorKeysContractClient};
-use soroban_sdk::{
-    testutils::{Address as _, Ledger as _},
-    Address, Env,
-};
+use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, Address, Env};
 
 fn setup(env: &Env) -> (CreatorKeysContractClient<'_>, Address) {
     let (client, _) = register_creator_keys(env);
@@ -44,10 +41,12 @@ fn test_sell_reverts_when_attempting_to_use_staked_keys() {
     assert_eq!(client.get_staked_balance(&creator, &holder), 6);
     assert_eq!(client.get_liquid_balance(&creator, &holder), 4);
 
-    // Advance the ledger so the sells are not blocked by the flash-loan guard.
-    env.ledger().with_mut(|l| l.sequence_number += 1);
-
     // Sell 4 liquid keys successfully
+    // Advance once before the loop; sells don't reset last_buy_ledger so
+    // sequence stays ahead of it for all iterations.
+    let mut l = env.ledger().get();
+    l.sequence_number += 1;
+    env.ledger().set(l);
     for _ in 0..4 {
         let result = client.try_sell_key(&creator, &holder, &None);
         assert!(
@@ -81,10 +80,10 @@ fn test_sell_succeeds_within_liquid_balance_limit() {
     }
     client.stake_keys(&creator, &holder, &6);
 
-    // Advance the ledger so the sells are not blocked by the flash-loan guard.
-    env.ledger().with_mut(|l| l.sequence_number += 1);
-
     for _ in 0..4 {
+        let mut l = env.ledger().get();
+        l.sequence_number += 1;
+        env.ledger().set(l);
         client.sell_key(&creator, &holder, &None);
     }
 
@@ -104,11 +103,11 @@ fn test_staked_balance_unchanged_after_sell_attempts() {
     }
     client.stake_keys(&creator, &holder, &6);
 
-    // Advance the ledger so the sells are not blocked by the flash-loan guard.
-    env.ledger().with_mut(|l| l.sequence_number += 1);
-
     // Successfully sell 4 keys (one at a time)
     for _ in 0..4 {
+        let mut l = env.ledger().get();
+        l.sequence_number += 1;
+        env.ledger().set(l);
         client.sell_key(&creator, &holder, &None);
     }
 
@@ -183,11 +182,10 @@ fn invariant_total_equals_liquid_plus_staked() {
     }
 
     client.stake_keys(&creator, &holder, &8);
-
-    // Advance the ledger so the sells are not blocked by the flash-loan guard.
-    env.ledger().with_mut(|l| l.sequence_number += 1);
-
     for _ in 0..5 {
+        let mut l = env.ledger().get();
+        l.sequence_number += 1;
+        env.ledger().set(l);
         client.sell_key(&creator, &holder, &None);
     }
 
@@ -229,10 +227,10 @@ fn invariant_sell_only_reduces_liquid_not_staked() {
 
     let staked_before = client.get_staked_balance(&creator, &holder);
 
-    // Advance the ledger so the sells are not blocked by the flash-loan guard.
-    env.ledger().with_mut(|l| l.sequence_number += 1);
-
     for _ in 0..8 {
+        let mut l = env.ledger().get();
+        l.sequence_number += 1;
+        env.ledger().set(l);
         client.sell_key(&creator, &holder, &None);
     }
 
@@ -312,15 +310,18 @@ fn test_stake_all_then_unstake_all() {
     client.stake_keys(&creator, &holder, &7);
     assert_eq!(client.get_liquid_balance(&creator, &holder), 0);
 
-    // Advance the ledger so the sells are not blocked by the flash-loan guard.
-    env.ledger().with_mut(|l| l.sequence_number += 1);
-
+    let mut l = env.ledger().get();
+    l.sequence_number += 1;
+    env.ledger().set(l);
     let result = client.try_sell_key(&creator, &holder, &None);
     assert_eq!(result, Err(Ok(ContractError::InsufficientBalance)));
 
     client.unstake_keys(&creator, &holder, &7);
     assert_eq!(client.get_liquid_balance(&creator, &holder), 7);
 
+    let mut l = env.ledger().get();
+    l.sequence_number += 1;
+    env.ledger().set(l);
     client.sell_key(&creator, &holder, &None);
     assert_eq!(client.get_liquid_balance(&creator, &holder), 6);
 }
@@ -366,10 +367,10 @@ fn test_partial_unstake_then_sell() {
     client.unstake_keys(&creator, &holder, &4);
     assert_eq!(client.get_liquid_balance(&creator, &holder), 4);
 
-    // Advance the ledger so the sells are not blocked by the flash-loan guard.
-    env.ledger().with_mut(|l| l.sequence_number += 1);
-
     for _ in 0..3 {
+        let mut l = env.ledger().get();
+        l.sequence_number += 1;
+        env.ledger().set(l);
         client.sell_key(&creator, &holder, &None);
     }
 

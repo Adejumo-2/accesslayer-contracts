@@ -69,8 +69,9 @@ fn test_buy_and_sell_event_topics_are_distinct() {
     client.buy_key(&creator, &user, &KEY_PRICE, &None);
     let buy_event_name = extract_first_event_name(&env, events::BUY_EVENT_NAME);
 
-    // Advance the ledger so the sell is not blocked by the flash-loan guard.
-    env.ledger().with_mut(|l| l.sequence_number += 1);
+    let mut l = env.ledger().get();
+    l.sequence_number += 1;
+    env.ledger().set(l);
     client.sell_key(&creator, &user, &None);
     let sell_event_name = extract_first_event_name(&env, events::SELL_EVENT_NAME);
 

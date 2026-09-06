@@ -8,10 +8,7 @@
 mod contract_test_env;
 
 use contract_test_env::{register_creator_keys, set_key_price_for_tests, test_env_with_auths};
-use soroban_sdk::{
-    testutils::{Address as _, Ledger as _},
-    Address, String,
-};
+use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, Address, String};
 
 #[test]
 fn holder_count_tracks_distinct_buyers_and_decrements_on_exit() {
@@ -46,8 +43,9 @@ fn holder_count_tracks_distinct_buyers_and_decrements_on_exit() {
     assert_eq!(client.get_creator_supply(&creator), 3);
 
     // Count decrements by one as each buyer fully exits.
-    // Advance the ledger so the sells are not blocked by the flash-loan guard.
-    env.ledger().with_mut(|l| l.sequence_number += 1);
+    let mut l = env.ledger().get();
+    l.sequence_number += 1;
+    env.ledger().set(l);
     client.sell_key(&creator, &buyer_a, &None);
     assert_eq!(client.get_creator_holder_count(&creator), 2);
 

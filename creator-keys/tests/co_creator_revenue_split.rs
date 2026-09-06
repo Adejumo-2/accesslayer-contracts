@@ -168,8 +168,9 @@ fn test_sell_splits_creator_fee_and_keeps_config_immutable() {
         split_creator_fee(sell_quote.creator_fee, CO_CREATOR_SHARE_BPS);
 
     let event_count_before_sell = co_creator_fee_events(&env).len();
-    // Advance the ledger so the sell is not blocked by the flash-loan guard.
-    env.ledger().with_mut(|l| l.sequence_number += 1);
+    let mut l = env.ledger().get();
+    l.sequence_number += 1;
+    env.ledger().set(l);
     client.sell_key(&creator, &holder, &None);
 
     let recipient_delta = client.get_creator_fee_balance(&creator) - recipient_before;

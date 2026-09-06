@@ -56,8 +56,9 @@ impl<'a> EventFixture<'a> {
     }
 
     fn sell_key(&self, env: &Env, seller: &Address) {
-        // Advance the ledger so the sell is not blocked by the flash-loan guard.
-        env.ledger().with_mut(|l| l.sequence_number += 1);
+        let mut l = env.ledger().get();
+        l.sequence_number += 1;
+        env.ledger().set(l);
         self.client.sell_key(&self.creator, seller, &None);
     }
 

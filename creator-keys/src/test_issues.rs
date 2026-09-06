@@ -293,6 +293,10 @@ mod issue_tests {
             soroban_sdk::vec![&env, buyer.clone()],
         );
 
+        // Advance ledger so sells are not blocked by the flash-loan guard.
+        let mut ledger = env.ledger().get();
+        ledger.sequence_number += 1;
+        env.ledger().set(ledger);
         for _ in 0..4 {
             client.sell_key(&creator, &buyer, &None);
         }

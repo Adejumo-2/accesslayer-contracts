@@ -59,8 +59,9 @@ fn test_sell_event_proceeds_at_supply_5() {
     env.events().all();
 
     // Sell a key (supply 5 -> 4)
-    // Advance the ledger so the sell is not blocked by the flash-loan guard.
-    env.ledger().with_mut(|l| l.sequence_number += 1);
+    let mut l = env.ledger().get();
+    l.sequence_number += 1;
+    env.ledger().set(l);
     client.sell_key(&creator, &trader, &None);
 
     // Verify the sell event is present and matches the independently computed proceeds
@@ -103,8 +104,9 @@ fn test_sell_event_proceeds_at_supply_10() {
     env.events().all();
 
     // Sell a key (supply 10 -> 9)
-    // Advance the ledger so the sell is not blocked by the flash-loan guard.
-    env.ledger().with_mut(|l| l.sequence_number += 1);
+    let mut l = env.ledger().get();
+    l.sequence_number += 1;
+    env.ledger().set(l);
     client.sell_key(&creator, &trader, &None);
 
     let raw_sell_price = KEY_PRICE;
