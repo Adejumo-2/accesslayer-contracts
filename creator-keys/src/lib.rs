@@ -2995,7 +2995,7 @@ impl CreatorKeysContract {
 
             if total_price
                 .checked_add(key_price)
-                .map_or(true, |t| t > payment)
+                .is_none_or(|t| t > payment)
             {
                 break;
             }
@@ -3543,6 +3543,15 @@ impl CreatorKeysContract {
         Ok(profile.supply)
     }
 
+    /// Purchase multiple keys in a single transaction.
+    ///
+    /// The buyer pays `payment` (total across all keys) and receives `quantity`
+    /// keys. Each key is priced along the bonding curve (or at the auction
+    /// price when in auction phase), and all per-key side-effects (fees,
+    /// dividends, TTL extension, events) are applied per key.
+    ///
+    /// # Limits
+    ///
     /// Validates that `client_schema_version` is compatible with this deployment.
     ///
     /// Returns `Ok(())` when the version matches the contract's current schema.
@@ -4845,6 +4854,7 @@ impl CreatorKeysContract {
                 creator_id: creator,
                 auction_price,
                 auction_supply,
+                ledger: env.ledger().sequence(),
             },
         );
         Ok(())
