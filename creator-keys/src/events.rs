@@ -1742,3 +1742,23 @@ pub struct KeysRedeemedEvent {
 pub fn keys_redeemed_topics(creator: &Address, holder: &Address) -> (Symbol, Address, Address) {
     (KEYS_REDEEMED_EVENT_NAME, creator.clone(), holder.clone())
 }
+
+/// Event name for a satisfied slippage check on buy or sell.
+pub const SLIPPAGE_CHECK_PASSED_EVENT_NAME: Symbol = symbol_short!("slp_ok");
+
+/// Emitted when a buy or sell with a non-None slippage bound passes the
+/// price/proceeds check, giving downstream indexers visibility into slippage
+/// guard behavior.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct SlippageCheckPassedEvent {
+    pub creator_id: Address,
+    pub actual_amount: i128,
+    pub bound: i128,
+    pub ledger: u32,
+}
+
+/// Shared slippage-check-passed event topics tuple.
+pub fn slippage_check_passed_topics(creator: &Address) -> (Symbol, Address) {
+    (SLIPPAGE_CHECK_PASSED_EVENT_NAME, creator.clone())
+}
