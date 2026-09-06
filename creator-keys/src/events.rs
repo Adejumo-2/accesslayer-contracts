@@ -1791,3 +1791,29 @@ pub struct SlippageCheckPassedEvent {
 pub fn slippage_check_passed_topics(creator: &Address) -> (Symbol, Address) {
     (SLIPPAGE_CHECK_PASSED_EVENT_NAME, creator.clone())
 }
+
+// --- Max buy quantity per transaction (#828) ---
+
+/// Event name emitted when the creator updates the max buy quantity per transaction.
+pub const MAX_BUY_QUANTITY_UPDATED_EVENT_NAME: Symbol = symbol_short!("mbq_upd");
+
+/// Stable max-buy-quantity-updated event payload for downstream indexers.
+///
+/// Event shape:
+/// - topics: `(MAX_BUY_QUANTITY_UPDATED_EVENT_NAME, creator_id)`
+/// - data: `MaxBuyQuantityUpdatedEvent`
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct MaxBuyQuantityUpdatedEvent {
+    /// Address of the creator whose limit was changed.
+    pub creator_id: Address,
+    /// New per-transaction buy quantity limit.
+    pub max_qty: u32,
+    /// Ledger sequence at the time of the update.
+    pub ledger: u32,
+}
+
+/// Shared max-buy-quantity-updated event topics tuple.
+pub fn max_buy_quantity_updated_topics(creator: &Address) -> (Symbol, Address) {
+    (MAX_BUY_QUANTITY_UPDATED_EVENT_NAME, creator.clone())
+}
