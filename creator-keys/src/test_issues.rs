@@ -854,13 +854,13 @@ mod issue_tests {
 
         // Supply 0 returns base price; supply 1 returns base price + slope > base price.
         // Assert no panic for either call.
-        let price_0 = client.get_price(&creator, &0u64);
+        let price_0 = client.get_price_at_supply(&creator, &0u64);
         assert_eq!(
             price_0, base_price,
             "get_price at supply 0 must return configured base price"
         );
 
-        let price_1 = client.get_price(&creator, &1u64);
+        let price_1 = client.get_price_at_supply(&creator, &1u64);
         assert!(
             price_1 > base_price,
             "get_price at supply 1 must be strictly greater than base price"
@@ -872,10 +872,10 @@ mod issue_tests {
         );
 
         // Also assert try_get_price returns Ok for both without panic.
-        let try_price_0 = client.try_get_price(&creator, &0u64);
+        let try_price_0 = client.try_get_price_at_supply(&creator, &0u64);
         assert_eq!(try_price_0, Ok(Ok(base_price)));
 
-        let try_price_1 = client.try_get_price(&creator, &1u64);
+        let try_price_1 = client.try_get_price_at_supply(&creator, &1u64);
         assert_eq!(try_price_1, Ok(Ok(base_price + slope)));
     }
 
@@ -895,14 +895,14 @@ mod issue_tests {
             client.set_key_price(&admin, &base_price);
             let creator = register_creator(&env, &client, None);
 
-            let price_0 = client.get_price(&creator, &0u64);
+            let price_0 = client.get_price_at_supply(&creator, &0u64);
             assert_eq!(
                 price_0, base_price,
                 "supply 0 must return base price {}",
                 base_price
             );
 
-            let price_1 = client.get_price(&creator, &1u64);
+            let price_1 = client.get_price_at_supply(&creator, &1u64);
             assert!(
                 price_1 > base_price,
                 "supply 1 price ({}) must be strictly greater than base price ({})",
@@ -927,9 +927,15 @@ mod issue_tests {
 
         // Linear preset
         let linear_creator = register_creator(&env, &client, None);
-        assert_eq!(client.get_price(&linear_creator, &0u64), base_price);
-        assert_eq!(client.get_price(&linear_creator, &1u64), base_price + slope);
-        assert!(client.get_price(&linear_creator, &1u64) > base_price);
+        assert_eq!(
+            client.get_price_at_supply(&linear_creator, &0u64),
+            base_price
+        );
+        assert_eq!(
+            client.get_price_at_supply(&linear_creator, &1u64),
+            base_price + slope
+        );
+        assert!(client.get_price_at_supply(&linear_creator, &1u64) > base_price);
 
         // Flat preset
         let flat_creator = Address::generate(&env);
@@ -945,8 +951,8 @@ mod issue_tests {
             &None,
             &None,
         );
-        assert_eq!(client.get_price(&flat_creator, &0u64), base_price);
-        assert_eq!(client.get_price(&flat_creator, &1u64), base_price);
+        assert_eq!(client.get_price_at_supply(&flat_creator, &0u64), base_price);
+        assert_eq!(client.get_price_at_supply(&flat_creator, &1u64), base_price);
 
         // Quadratic preset
         let quad_creator = Address::generate(&env);
@@ -962,9 +968,12 @@ mod issue_tests {
             &None,
             &None,
         );
-        assert_eq!(client.get_price(&quad_creator, &0u64), base_price);
-        assert_eq!(client.get_price(&quad_creator, &1u64), base_price + slope);
-        assert!(client.get_price(&quad_creator, &1u64) > base_price);
+        assert_eq!(client.get_price_at_supply(&quad_creator, &0u64), base_price);
+        assert_eq!(
+            client.get_price_at_supply(&quad_creator, &1u64),
+            base_price + slope
+        );
+        assert!(client.get_price_at_supply(&quad_creator, &1u64) > base_price);
     }
 
     // =========================================================================
