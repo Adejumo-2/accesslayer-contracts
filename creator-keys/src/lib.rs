@@ -100,6 +100,12 @@ pub enum ContractError {
     LimitTooHigh = 66,
     /// The caller is not in the approved-caller allowlist for the price oracle.
     CallerNotApproved = 67,
+    /// Emitted when a `batch_transfer_keys` call contains more than the allowed
+    /// number of `(recipient, quantity)` pairs.
+    BatchTransferSizeExceeded = 68,
+    /// Emitted when a `batch_transfer_keys` call contains a recipient address
+    /// that is the same as the sender (self-transfer inside a batch).
+    InvalidRecipient = 69,
 }
 
 /// Errors raised by the staking lifecycle entrypoints
@@ -905,6 +911,12 @@ pub const MAX_DISCOUNT_TIERS: u32 = 5;
 
 /// Maximum number of entries in a single batch buy call.
 pub const MAX_BATCH_BUY_SIZE: usize = 5;
+
+/// Maximum number of `(recipient, quantity)` pairs accepted by a single
+/// [`CreatorKeysContract::batch_transfer_keys`] call.
+///
+/// Larger lists revert with [`ContractError::BatchTransferSizeExceeded`].
+pub const MAX_BATCH_TRANSFER_SIZE: u32 = 10;
 
 /// Maximum royalty fee basis points (5%).
 pub const MAX_ROYALTY_BPS: u32 = 500;
@@ -6375,6 +6387,132 @@ impl CreatorKeysContract {
     /// This method does not mutate contract state.
     pub fn get_treasury_balance(env: Env) -> i128 {
         read_treasury_balance(&env)
+    }
+
+    /// Transfers keys from the caller to multiple recipients in a single
+    /// atomic transaction.
+    ///
+    /// Accepts up to [`MAX_BATCH_TRANSFER_SIZE`] `(recipient, quantity)` pairs.
+    /// All transfers are processed atomically: if any single step fails, the
+    /// entire batch reverts and no state changes are persisted.
+    ///
+    /// Dividend checkpoints are settled for the sender and for each recipient
+    /// before any balance is modified, so dividend accounting stays consistent
+    /// across the whole batch.
+    ///
+    /// # Errors
+    ///
+    /// - [`ContractError::NotRegistered`] if the creator is not registered.
+    /// - [`ContractError::BatchTransferSizeExceeded`] if `transfers` contains
+    ///   more than [`MAX_BATCH_TRANSFER_SIZE`] entries.
+    /// - [`ContractError::ZeroTransferAmount`] if any entry has a zero quantity.
+    /// - [`ContractError::InvalidRecipient`] if any recipient equals the sender
+    ///   (self-transfer is not allowed inside a batch).
+    /// - [`ContractError::InsufficientBalance`] if the sender's available
+    ///   balance is less than the sum of all requested quantities.
+    pub fn batch_transfer_keys(
+        env: Env,
+        creator: Address,
+        from: Address,
+        transfers: Vec<(Address, u32)>,
+    ) -> Result<(), ContractError> {
+        from.require_auth();
+        assert_not_paused(&env)?;
+
+        if transfers.len() > MAX_BATCH_TRANSFER_SIZE {
+            return Err(ContractError::BatchTransferSizeExceeded);
+        }
+
+        let mut profile: CreatorProfile = read_registered_creator_profile(&env, &creator)?;
+
+        // --- Pre-flight validation pass ---
+        // Validate every entry and total the quantities before touching state.
+        let mut total_quantity: u32 = 0;
+        for (to, qty) in transfers.iter() {
+            if qty == 0 {
+                return Err(ContractError::ZeroTransferAmount);
+            }
+            if to == from {
+                return Err(ContractError::InvalidRecipient);
+            }
+            total_quantity = total_quantity
+                .checked_add(qty)
+                .ok_or(ContractError::Overflow)?;
+        }
+
+        // Read sender balance and settle dividends before any mutations.
+        let from_balance_key = constants::storage::holder_balance_key(&creator, &from);
+        let from_balance: u32 = env
+            .storage()
+            .persistent()
+            .get(&from_balance_key)
+            .unwrap_or(0);
+        settle_holder_dividends(&env, &creator, &from, from_balance)?;
+
+        if available_holder_balance(&env, &creator, &from) < total_quantity {
+            return Err(ContractError::InsufficientBalance);
+        }
+
+        // --- Apply all transfers atomically ---
+        let mut remaining_from_balance = from_balance;
+        for (to, qty) in transfers.iter() {
+            let to_balance_key = constants::storage::holder_balance_key(&creator, &to);
+            let to_balance: u32 = env.storage().persistent().get(&to_balance_key).unwrap_or(0);
+
+            // Settle dividends for each recipient before their balance changes.
+            settle_holder_dividends(&env, &creator, &to, to_balance)?;
+
+            // Decrement the sender's running balance.
+            remaining_from_balance = remaining_from_balance
+                .checked_sub(qty)
+                .ok_or(ContractError::InsufficientBalance)?;
+
+            // Increment the recipient balance.
+            let new_to_balance = to_balance.checked_add(qty).ok_or(ContractError::Overflow)?;
+            env.storage()
+                .persistent()
+                .set(&to_balance_key, &new_to_balance);
+            extend_key_ttl_to_full_window(&env, &to_balance_key);
+
+            // Increment holder count when the recipient had zero balance before.
+            if to_balance == 0 {
+                profile.holder_count = profile
+                    .holder_count
+                    .checked_add(1)
+                    .ok_or(ContractError::Overflow)?;
+            }
+        }
+
+        // Write the final sender balance.
+        env.storage()
+            .persistent()
+            .set(&from_balance_key, &remaining_from_balance);
+        extend_key_ttl_to_full_window(&env, &from_balance_key);
+
+        // Decrement holder count if the sender balance reaches zero.
+        if remaining_from_balance == 0 {
+            profile.holder_count = profile
+                .holder_count
+                .checked_sub(1)
+                .ok_or(ContractError::Overflow)?;
+        }
+
+        // Write the updated profile (holder_count may have changed).
+        let profile_key = constants::storage::creator(&creator);
+        env.storage().persistent().set(&profile_key, &profile);
+
+        env.events().publish(
+            events::batch_transfer_completed_topics(&creator, &from),
+            events::BatchTransferCompletedEvent {
+                creator_id: creator,
+                from,
+                transfers,
+                total_transferred: total_quantity,
+                ledger: env.ledger().sequence(),
+            },
+        );
+
+        Ok(())
     }
 
     /// Withdraws `amount` from the protocol treasury to `recipient`.
