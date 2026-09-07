@@ -6279,9 +6279,7 @@ impl CreatorKeysContract {
                 .ok_or(ContractError::InsufficientBalance)?;
 
             // Increment the recipient balance.
-            let new_to_balance = to_balance
-                .checked_add(qty)
-                .ok_or(ContractError::Overflow)?;
+            let new_to_balance = to_balance.checked_add(qty).ok_or(ContractError::Overflow)?;
             env.storage()
                 .persistent()
                 .set(&to_balance_key, &new_to_balance);
