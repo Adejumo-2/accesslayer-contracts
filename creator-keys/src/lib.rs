@@ -98,14 +98,14 @@ pub enum ContractError {
     QuantityExceedsLimit = 65,
     /// The max buy quantity value is above the allowed ceiling (10 000).
     LimitTooHigh = 66,
-    /// Emitted when a `batch_transfer_keys` call contains more than the allowed
-    /// number of `(recipient, quantity)` pairs.
-    BatchTransferSizeExceeded = 67,
-    /// Emitted when a `batch_transfer_keys` call contains a recipient address
-    /// that is the same as the sender (self-transfer inside a batch).
-    InvalidRecipient = 68,
     /// The caller is not in the approved-caller allowlist for the price oracle.
     CallerNotApproved = 67,
+    /// Emitted when a `batch_transfer_keys` call contains more than the allowed
+    /// number of `(recipient, quantity)` pairs.
+    BatchTransferSizeExceeded = 68,
+    /// Emitted when a `batch_transfer_keys` call contains a recipient address
+    /// that is the same as the sender (self-transfer inside a batch).
+    InvalidRecipient = 69,
 }
 
 /// Errors raised by the staking lifecycle entrypoints
