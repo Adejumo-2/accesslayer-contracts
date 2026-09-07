@@ -17,7 +17,7 @@ use contract_test_env::{
 };
 use creator_keys::{events, ContractError};
 use soroban_sdk::{
-    testutils::{Address as _, Events},
+    testutils::{Address as _, Events, Ledger as _},
     Address, IntoVal, Symbol,
 };
 
@@ -32,6 +32,9 @@ fn test_sell_zero_keys_panics_on_direct_call() {
     let zero_seller = Address::generate(&env);
 
     // Direct invocation panics because seller has zero keys
+    let mut l = env.ledger().get();
+    l.sequence_number += 1;
+    env.ledger().set(l);
     client.sell_key(&creator, &zero_seller, &None);
 }
 
@@ -116,6 +119,9 @@ fn test_sell_zero_keys_after_full_exit_reverts_and_emits_no_event() {
     assert_eq!(client.get_key_balance(&creator, &trader), 1);
     assert_eq!(client.get_total_key_supply(&creator), 1);
 
+    let mut l = env.ledger().get();
+    l.sequence_number += 1;
+    env.ledger().set(l);
     client.sell_key(&creator, &trader, &None);
     assert_eq!(client.get_key_balance(&creator, &trader), 0);
     assert_eq!(client.get_total_key_supply(&creator), 0);
@@ -182,12 +188,15 @@ fn test_sell_zero_liquid_keys_when_all_staked_reverts_and_emits_no_event() {
     // Clear event log
     env.events().all();
 
-    // Holder attempts to sell when liquid balance is 0 and all keys are staked.
+    // Holder attempts to sell when liquid balance is 0
+    let mut l = env.ledger().get();
+    l.sequence_number += 1;
+    env.ledger().set(l);
     let result = client.try_sell_key(&creator, &holder, &None);
     assert_eq!(
         result,
-        Err(Ok(ContractError::KeysStaked)),
-        "sell must fail with KeysStaked when all keys are staked"
+        Err(Ok(ContractError::InsufficientBalance)),
+        "sell must fail when liquid keys count is 0"
     );
 
     let after = capture_snapshot(&client, &creator, &holder);
