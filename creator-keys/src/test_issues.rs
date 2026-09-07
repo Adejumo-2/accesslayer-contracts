@@ -282,6 +282,10 @@ mod issue_tests {
             client.buy_key(&creator, &buyer, &KEY_PRICE, &None);
         }
 
+        // Advance ledger so sells are in a different ledger from the last buy
+        // (required by the flash-loan guard).
+        env.ledger().with_mut(|l| l.sequence_number += 1);
+
         assert_supply_equals_holder_sum(
             &env,
             &client,
