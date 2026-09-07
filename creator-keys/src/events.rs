@@ -1856,6 +1856,8 @@ pub fn batch_transfer_completed_topics(
         creator.clone(),
         from.clone(),
     )
+}
+
 /// Event name for a price-oracle read.
 pub const PRICE_QUERIED_EVENT_NAME: Symbol = symbol_short!("pri_qry");
 
