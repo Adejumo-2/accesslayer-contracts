@@ -1807,3 +1807,31 @@ pub struct MaxBuyQuantityUpdatedEvent {
 pub fn max_buy_quantity_updated_topics(creator: &Address) -> (Symbol, Address) {
     (MAX_BUY_QUANTITY_UPDATED_EVENT_NAME, creator.clone())
 }
+
+/// Event name for a price-oracle read.
+pub const PRICE_QUERIED_EVENT_NAME: Symbol = symbol_short!("pri_qry");
+
+/// Stable price-queried event payload for downstream indexers.
+///
+/// Event shape:
+/// - topics: `(PRICE_QUERIED_EVENT_NAME, caller)`
+/// - data: `PriceQueriedEvent`
+///
+/// Emitted on every successful price-oracle read (`get_price` /
+/// `get_twap_price`), carrying the calling contract's address and the returned
+/// price.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct PriceQueriedEvent {
+    /// Contract that invoked the oracle entrypoint.
+    pub caller: Address,
+    /// Creator whose key's price was read.
+    pub creator: Address,
+    /// Price returned to the caller.
+    pub price: i128,
+}
+
+/// Shared price-queried event topics tuple.
+pub fn price_queried_topics(caller: &Address) -> (Symbol, Address) {
+    (PRICE_QUERIED_EVENT_NAME, caller.clone())
+}

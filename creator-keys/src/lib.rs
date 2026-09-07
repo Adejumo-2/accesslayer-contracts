@@ -98,6 +98,8 @@ pub enum ContractError {
     QuantityExceedsLimit = 65,
     /// The max buy quantity value is above the allowed ceiling (10 000).
     LimitTooHigh = 66,
+    /// The caller is not in the approved-caller allowlist for the price oracle.
+    CallerNotApproved = 67,
 }
 
 /// Errors raised by the staking lifecycle entrypoints
@@ -623,6 +625,14 @@ pub mod constants {
         /// Storage key for the escrow balance held for a deprecated key's buyback pool.
         pub fn deprecation_escrow(creator: &Address) -> DataKey {
             DataKey::DeprecationEscrow(creator.clone())
+        }
+
+        /// Storage key for the price-oracle approved-caller allowlist.
+        pub const APPROVED_CALLERS: DataKey = DataKey::ApprovedCallers;
+
+        /// Storage key for a creator's price observation history (TWAP).
+        pub fn price_history(creator: &Address) -> DataKey {
+            DataKey::PriceHistory(creator.clone())
         }
     }
     fn creator_key(creator: &Address) -> DataKey {
@@ -5679,7 +5689,11 @@ impl CreatorKeysContract {
     ///
     /// Returns `Err(ContractError::KeyPriceNotSet)` if base key price is not set,
     /// or `Err(ContractError::Overflow)` if arithmetic overflows or supply exceeds `u32::MAX`.
-    pub fn get_price(env: Env, creator: Address, supply: u64) -> Result<i128, ContractError> {
+    pub fn get_price_at_supply(
+        env: Env,
+        creator: Address,
+        supply: u64,
+    ) -> Result<i128, ContractError> {
         Self::query_price(env, creator, supply)
     }
 

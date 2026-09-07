@@ -24,10 +24,10 @@ fn setup_approved(env: &Env, client: &CreatorKeysContractClient<'_>, caller: &Ad
     let admin = Address::generate(env);
     // Set pricing + linear bonding curve so price varies with supply, plus a
     // fee config (required by buy quotes) and the protocol admin.
+    client.set_protocol_admin(&admin, &admin);
     client.set_key_price(&admin, &KEY_PRICE);
     client.set_curve_slope(&admin, &SLOPE);
     client.set_fee_config(&admin, &9000, &1000);
-    client.set_protocol_admin(&admin, &admin);
     client.add_approved_caller(&admin, caller);
     admin
 }
