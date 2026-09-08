@@ -418,6 +418,8 @@ pub mod constants {
         pub const TREASURY_BALANCE: DataKey = DataKey::TreasuryBalance;
         pub const RETENTION_POLICY: DataKey = DataKey::RetentionPolicy;
         pub const GLOBAL_DEADLINE_LEDGER: DataKey = DataKey::GlobalDeadlineLedger;
+        pub const PROTOCOL_FEE_BPS: DataKey = DataKey::ProtocolFeeBps;
+        pub const LOCKUP_DURATION_SECS: DataKey = DataKey::LockupDurationSecs;
 
         /// Protocol-wide emergency trading halt flag (#784).
         pub const GLOBAL_TRADING_PAUSED: DataKey = DataKey::GlobalTradingPaused;
@@ -604,14 +606,6 @@ pub mod constants {
 
         pub fn whitelist_mode(key_id: &Address) -> DataKey {
             DataKey::WhitelistMode(key_id.clone())
-        }
-
-        pub fn holder_cap_bps(_creator: &Address) -> soroban_sdk::Symbol {
-            soroban_sdk::symbol_short!("hl_cap")
-        }
-
-        pub fn last_buy_timestamp(_creator: &Address, _holder: &Address) -> soroban_sdk::Symbol {
-            soroban_sdk::symbol_short!("lst_buy")
         }
 
         pub fn vesting_claimed(creator: &Address, beneficiary: &Address) -> DataKey {
@@ -1216,15 +1210,6 @@ pub struct CoCreatorConfig {
 pub struct HolderSnapshotMeta {
     pub snapshot_ledger: u32,
     pub total_holders: u32,
-}
-
-/// On-chain creator key identity, set once via `initialise_key` (issue #779).
-#[derive(Clone, Debug, PartialEq)]
-#[contracttype]
-pub struct KeyMetadata {
-    pub name: Bytes,
-    pub bio: Bytes,
-    pub avatar_uri: Bytes,
 }
 
 /// Maximum number of holder addresses accepted per `take_snapshot` call.
@@ -3625,7 +3610,7 @@ impl CreatorKeysContract {
             if let Some(cap_bps) = env
                 .storage()
                 .persistent()
-                .get::<soroban_sdk::Symbol, u32>(&constants::storage::holder_cap_bps(&creator))
+                .get::<DataKey, u32>(&constants::storage::holder_cap_bps(&creator))
             {
                 let post_buy_supply = profile
                     .supply
@@ -5202,33 +5187,18 @@ impl CreatorKeysContract {
     pub fn initialise_key(
         env: Env,
         creator: Address,
-        name: Bytes,
-        bio: Bytes,
-        avatar_uri: Bytes,
+        metadata: KeyMetadata,
     ) -> Result<(), ContractError> {
         creator.require_auth();
         read_registered_creator_profile(&env, &creator)?;
 
-        if name.is_empty() || bio.is_empty() {
-            return Err(ContractError::DisplayNameEmpty);
-        }
-        if name.len() > 64 {
-            return Err(ContractError::NameTooLong);
-        }
-        if bio.len() > 256 {
-            return Err(ContractError::BioTooLong);
-        }
+        validate_key_metadata(&metadata)?;
 
         let key = constants::storage::key_metadata(&creator);
         if env.storage().persistent().has(&key) {
             return Err(ContractError::KeyAlreadyInitialised);
         }
 
-        let metadata = KeyMetadata {
-            name: name.clone(),
-            bio: bio.clone(),
-            avatar_uri: avatar_uri.clone(),
-        };
         env.storage().persistent().set(&key, &metadata);
         extend_key_ttl_to_full_window(&env, &key);
 
@@ -5236,9 +5206,9 @@ impl CreatorKeysContract {
             events::key_initialised_topics(&creator),
             events::KeyInitialisedEvent {
                 creator_id: creator,
-                name,
-                bio,
-                avatar_uri,
+                name: metadata.name,
+                bio: metadata.bio,
+                avatar_uri: metadata.avatar_uri,
             },
         );
 
@@ -5251,6 +5221,50 @@ impl CreatorKeysContract {
         env.storage()
             .persistent()
             .get(&constants::storage::key_metadata(&creator))
+    }
+
+    /// Updates a creator's key metadata. Only fields wrapped in `Some` are
+    /// changed; `None` fields remain untouched.
+    pub fn update_metadata(
+        env: Env,
+        creator: Address,
+        name: Option<String>,
+        bio: Option<String>,
+        avatar_uri: Option<String>,
+    ) -> Result<(), ContractError> {
+        creator.require_auth();
+        let mut metadata = read_creator_metadata(&env, &creator)
+            .ok_or(ContractError::NotRegistered)?;
+
+        let mut changed = false;
+        if let Some(n) = name {
+            if n.len() > METADATA_NAME_MAX_LEN {
+                return Err(ContractError::HandleTooLong);
+            }
+            metadata.name = n;
+            changed = true;
+        }
+        if let Some(b) = bio {
+            if b.len() > METADATA_BIO_MAX_LEN {
+                return Err(ContractError::HandleTooLong);
+            }
+            metadata.bio = b;
+            changed = true;
+        }
+        if let Some(u) = avatar_uri {
+            if u.len() > METADATA_AVATAR_URI_MAX_LEN {
+                return Err(ContractError::HandleTooLong);
+            }
+            metadata.avatar_uri = u;
+            changed = true;
+        }
+
+        if !changed {
+            return Ok(());
+        }
+
+        write_creator_metadata(&env, &creator, &metadata);
+        Ok(())
     }
 
     /// Read-only view: returns accrued co-creator fee balance for a creator.

@@ -1,6 +1,10 @@
 #![cfg(test)]
 
-use crate::{ContractError, CreatorKeysContract, CreatorKeysContractClient, RegisterCreatorParams};
+use crate::{
+    ContractError, CreatorKeysContract, CreatorKeysContractClient, KeyMetadata,
+    METADATA_AVATAR_URI_MAX_LEN, METADATA_BIO_MAX_LEN, METADATA_NAME_MAX_LEN,
+    RegisterCreatorParams,
+};
 use soroban_sdk::{testutils::Address as _, Address, Env, String};
 
 fn setup_test() -> (Env, CreatorKeysContractClient<'static>, Address, Address) {

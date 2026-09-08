@@ -474,9 +474,9 @@ pub const KEY_INITIALISED_EVENT_NAME: Symbol = symbol_short!("key_init");
 #[contracttype]
 pub struct KeyInitialisedEvent {
     pub creator_id: Address,
-    pub name: Bytes,
-    pub bio: Bytes,
-    pub avatar_uri: Bytes,
+    pub name: String,
+    pub bio: String,
+    pub avatar_uri: String,
 }
 
 pub fn key_initialised_topics(creator_id: &Address) -> (Symbol, Address) {
