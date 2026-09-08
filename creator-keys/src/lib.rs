@@ -1822,7 +1822,7 @@ fn is_global_trading_paused(env: &Env) -> bool {
 /// the per-key pause guard so a global halt always takes precedence.
 fn assert_global_trading_not_halted(env: &Env) -> Result<(), ContractError> {
     if is_global_trading_paused(env) {
-        return Err(ContractError::ProtocolPaused);
+        return Err(ContractError::GlobalTradingHalted);
     }
     Ok(())
 }
