@@ -6,7 +6,7 @@ use crate::{
     RegisterCreatorParams,
 };
 use soroban_sdk::{
-    testutils::Address as _, testutils::Ledger as _, Address, Bytes, Env, String, Vec,
+    testutils::Address as _, testutils::Ledger as _, Address, Env, String, Vec,
 };
 
 fn setup_test() -> (Env, CreatorKeysContractClient<'static>, Address, Address) {

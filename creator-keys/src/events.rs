@@ -25,7 +25,7 @@ use crate::{
     CreatorKeysContractArgs, CreatorKeysContractClient,
 };
 use soroban_sdk::{
-    contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, Env, String, Symbol,
+    contracterror, contractimpl, contracttype, symbol_short, Address, Env, String, Symbol,
     Vec,
 };
 
