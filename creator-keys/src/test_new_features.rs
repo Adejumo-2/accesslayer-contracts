@@ -267,7 +267,7 @@ fn test_initialise_key_panics_on_name_too_long() {
     };
 
     let result = client.try_initialise_key(&creator, &metadata);
-    assert_eq!(result, Err(Ok(ContractError::HandleTooLong)));
+    assert_eq!(result, Err(Ok(ContractError::NameTooLong)));
 }
 
 #[test]
