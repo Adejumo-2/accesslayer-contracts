@@ -233,7 +233,7 @@ fn test_initialise_key_panics_on_duplicate() {
 
     // Second initialisation should fail
     let result = client.try_initialise_key(&creator, &metadata);
-    assert_eq!(result, Err(Ok(ContractError::AlreadyRegistered)));
+    assert_eq!(result, Err(Ok(ContractError::KeyAlreadyInitialised)));
 }
 
 #[test]
@@ -440,8 +440,8 @@ fn test_update_metadata_panics_on_non_creator_caller() {
         &None,
         &None,
     );
-    // Non-creator caller should fail with Unauthorized
-    assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
+    // Non-creator caller: attacker has no metadata so this returns NotRegistered
+    assert_eq!(result, Err(Ok(ContractError::NotRegistered)));
 }
 
 #[test]

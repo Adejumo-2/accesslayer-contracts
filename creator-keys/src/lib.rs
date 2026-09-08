@@ -1733,17 +1733,17 @@ fn validate_key_metadata(metadata: &KeyMetadata) -> Result<(), ContractError> {
     assert_metadata_field_length(
         &metadata.name,
         METADATA_NAME_MAX_LEN,
-        ContractError::HandleTooLong,
+        ContractError::NameTooLong,
     )?;
     assert_metadata_field_length(
         &metadata.bio,
         METADATA_BIO_MAX_LEN,
-        ContractError::HandleTooLong,
+        ContractError::BioTooLong,
     )?;
     assert_metadata_field_length(
         &metadata.avatar_uri,
         METADATA_AVATAR_URI_MAX_LEN,
-        ContractError::HandleTooLong,
+        ContractError::NameTooLong,
     )?;
     Ok(())
 }
@@ -5192,13 +5192,11 @@ impl CreatorKeysContract {
 
         validate_key_metadata(&metadata)?;
 
-        let key = constants::storage::key_metadata(&creator);
-        if env.storage().persistent().has(&key) {
+        if read_creator_metadata(&env, &creator).is_some() {
             return Err(ContractError::KeyAlreadyInitialised);
         }
 
-        env.storage().persistent().set(&key, &metadata);
-        extend_key_ttl_to_full_window(&env, &key);
+        write_creator_metadata(&env, &creator, &metadata);
 
         env.events().publish(
             events::key_initialised_topics(&creator),
@@ -5216,9 +5214,7 @@ impl CreatorKeysContract {
     /// Read-only view: returns a creator's on-chain key metadata, or `None`
     /// if `initialise_key` has not been called for them.
     pub fn get_key_metadata(env: Env, creator: Address) -> Option<KeyMetadata> {
-        env.storage()
-            .persistent()
-            .get(&constants::storage::key_metadata(&creator))
+        read_creator_metadata(&env, &creator)
     }
 
     /// Updates a creator's key metadata. Only fields wrapped in `Some` are
