@@ -25,8 +25,7 @@ use crate::{
     CreatorKeysContractArgs, CreatorKeysContractClient,
 };
 use soroban_sdk::{
-    contracterror, contractimpl, contracttype, symbol_short, Address, Env, String, Symbol,
-    Vec,
+    contracterror, contractimpl, contracttype, symbol_short, Address, Env, String, Symbol, Vec,
 };
 
 /// Event name for protocol trade fee collected on a buy or sell.

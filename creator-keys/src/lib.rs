@@ -2,9 +2,7 @@
 #![allow(clippy::enum_variant_names)] // `contracttype` macro-generated enums share prefixes by design
 pub mod quote_view_errors;
 
-use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, Address, Env, String, Vec,
-};
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, String, Vec};
 
 pub mod events;
 pub mod test_new_features;

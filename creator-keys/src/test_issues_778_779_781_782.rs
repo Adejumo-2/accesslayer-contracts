@@ -5,9 +5,7 @@ use crate::{
     ContractError, CreatorKeysContract, CreatorKeysContractClient, KeyMetadata,
     RegisterCreatorParams,
 };
-use soroban_sdk::{
-    testutils::Address as _, testutils::Ledger as _, Address, Env, String, Vec,
-};
+use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, Address, Env, String, Vec};
 
 fn setup_test() -> (Env, CreatorKeysContractClient<'static>, Address, Address) {
     let env = Env::default();
