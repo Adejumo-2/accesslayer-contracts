@@ -2022,7 +2022,7 @@ fn read_trade_fee_config(env: &Env) -> Option<(u32, Address)> {
     let fee_bps: u32 = env
         .storage()
         .persistent()
-        .get(&soroban_sdk::symbol_short!("pf_bps"))?;
+        .get(&constants::storage::PROTOCOL_FEE_BPS)?;
     let treasury: Address = env
         .storage()
         .persistent()
@@ -2147,7 +2147,7 @@ fn sub_staked_balance(env: &Env, creator: &Address, holder: &Address, amount: u3
 fn read_lockup_duration_secs(env: &Env) -> Option<u64> {
     env.storage()
         .persistent()
-        .get(&soroban_sdk::symbol_short!("lck_dur"))
+        .get(&constants::storage::LOCKUP_DURATION_SECS)
 }
 
 /// Reads the total keys currently staked across all holders for a creator.
@@ -5515,7 +5515,8 @@ impl CreatorKeysContract {
 
         env.storage()
             .persistent()
-            .set(&soroban_sdk::symbol_short!("pf_bps"), &resolved_bps);
+            .set(&constants::storage::PROTOCOL_FEE_BPS, &resolved_bps);
+        extend_key_ttl_to_full_window(&env, &constants::storage::PROTOCOL_FEE_BPS);
         env.storage()
             .persistent()
             .set(&constants::storage::TREASURY_ADDRESS, &treasury);
@@ -6336,7 +6337,8 @@ impl CreatorKeysContract {
         }
         env.storage()
             .persistent()
-            .set(&soroban_sdk::symbol_short!("lck_dur"), &duration_secs);
+            .set(&constants::storage::LOCKUP_DURATION_SECS, &duration_secs);
+        extend_key_ttl_to_full_window(&env, &constants::storage::LOCKUP_DURATION_SECS);
         Ok(())
     }
 
