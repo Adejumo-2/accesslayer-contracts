@@ -3903,7 +3903,7 @@ impl CreatorKeysContract {
             if let Some(last_buy_ts) = env
                 .storage()
                 .persistent()
-                .get::<soroban_sdk::Symbol, u64>(&last_buy_key)
+                .get::<DataKey, u64>(&last_buy_key)
             {
                 let now = env.ledger().timestamp();
                 let unlock_at = last_buy_ts
