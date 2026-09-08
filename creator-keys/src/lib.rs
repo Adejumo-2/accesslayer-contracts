@@ -5233,8 +5233,8 @@ impl CreatorKeysContract {
         avatar_uri: Option<String>,
     ) -> Result<(), ContractError> {
         creator.require_auth();
-        let mut metadata = read_creator_metadata(&env, &creator)
-            .ok_or(ContractError::NotRegistered)?;
+        let mut metadata =
+            read_creator_metadata(&env, &creator).ok_or(ContractError::NotRegistered)?;
 
         let mut changed = false;
         if let Some(n) = name {

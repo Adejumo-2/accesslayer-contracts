@@ -1,7 +1,10 @@
 //! Tests for issues #778 (holder snapshots), #779 (key metadata), #781
 //! (flash-loan guard), and #782 (settable co-creator revenue split).
 
-use crate::{ContractError, CreatorKeysContract, CreatorKeysContractClient, KeyMetadata, RegisterCreatorParams};
+use crate::{
+    ContractError, CreatorKeysContract, CreatorKeysContractClient, KeyMetadata,
+    RegisterCreatorParams,
+};
 use soroban_sdk::{
     testutils::Address as _, testutils::Ledger as _, Address, Bytes, Env, String, Vec,
 };

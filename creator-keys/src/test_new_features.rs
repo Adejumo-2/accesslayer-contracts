@@ -2,8 +2,8 @@
 
 use crate::{
     ContractError, CreatorKeysContract, CreatorKeysContractClient, KeyMetadata,
-    METADATA_AVATAR_URI_MAX_LEN, METADATA_BIO_MAX_LEN, METADATA_NAME_MAX_LEN,
-    RegisterCreatorParams,
+    RegisterCreatorParams, METADATA_AVATAR_URI_MAX_LEN, METADATA_BIO_MAX_LEN,
+    METADATA_NAME_MAX_LEN,
 };
 use soroban_sdk::{testutils::Address as _, Address, Env, String};
 
